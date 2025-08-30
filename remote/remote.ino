@@ -1,4 +1,6 @@
-#include <dummy.h>
+#include <WiFi.h>
+#include <WiFiUdp.h>
+#include <ESPmDNS.h>
 
 #define BTN_SOPHIA 27
 #define BTN_COFFEE 33
@@ -34,9 +36,50 @@
 #define orange_g 165
 #define orange_b 0
 
+const char * ssid = "IronReverseSoulSteeler";
+const char * password = "dekuposh84";
+const char * RECEIVER_HOST = "sophia.signbox";
+const char * REMOTE_HOST = "sophia.remote";
+const uint16_t RECEIVER_PORT = 4210;
+const uint16_t LOCAL_PORT = 4211;
+
+WiFiUDP udp;
+
+void connectWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(true);
+  WiFi.setSleep(false); // lower latency
+  WiFi.begin(ssid, password);
+
+  Serial.println("Connecting to WiFi");
+
+  // If it doesn't connect in 10 seconds, reboot and try again
+  int wait = 0;
+  int max_wait = 10000;
+
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(400);
+    wait += 400;
+
+    if(wait >= max_wait){
+      Serial.println("Connection Failed. Rebooting.");
+      ESP.restart();
+    }
+  }
+  Serial.println();
+  Serial.println("WiFi OK, IP: ");
+  Serial.println(WiFi.localIP());
+}
+
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(115200);
+
+  // Give the USB/monitor some time to catch up
+  delay(2000); 
+
   pinMode(BTN_SOPHIA, INPUT_PULLUP);
   pinMode(BTN_COFFEE, INPUT_PULLUP);
   pinMode(BTN_DOG, INPUT_PULLUP);
@@ -67,12 +110,69 @@ void setup() {
   ledcWrite(BACKLIGHT3_RED,   255);
   ledcWrite(BACKLIGHT3_GREEN, 255);
   ledcWrite(BACKLIGHT3_BLUE,  255);
+
+  connectWiFi();
+
+  if (!udp.begin(LOCAL_PORT)) {
+    Serial.println("UDP begin failed!");
+  } else {
+    Serial.print("UDP ready on local port "); Serial.println(LOCAL_PORT);
+  }
 }
 
-void fadeColor(int r, int g, int b){
-  float rf = r / 255.0;
-  float gf = g / 255.0;
-  float bf = b / 255.0;
+
+
+bool sendMessageAndWaitAck(IPAddress dest, const char * msg, uint32_t timeout_ms){
+  // Send
+  if (udp.beginPacket(dest, RECEIVER_PORT) == 0)
+    return false;
+
+  udp.print(msg);
+  udp.endPacket();
+
+  uint32_t start = millis();
+  char buf[128];
+
+  // Wait for ACK on our local UDP socket
+  while (millis() - start < timeout_ms) {
+    int packetSize = udp.parsePacket();
+    if (packetSize > 0) {
+      int len = udp.read(buf, sizeof(buf) - 1);
+      if (len < 0)
+        continue;
+
+      buf[len] = '\0';
+      Serial.printf("RX ACK: \"%s\"\n", buf);
+      String expected = String("ACK:") + msg;
+      if (expected == String(buf)) {
+        return true;
+      }
+    }
+    delay(5);
+  }
+  Serial.println("ACK timeout");
+  return false;
+}
+
+TaskHandle_t pulseTaskHandle;
+
+struct PulseData {
+  int r;
+  int g;
+  int b;
+};
+
+PulseData pulse_data;
+
+portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+bool pulsing = false;
+
+void pulseColor(void * data){
+  PulseData * pulse_data = (PulseData *)data;
+
+  float rf = pulse_data->r / 255.0;
+  float gf = pulse_data->g / 255.0;
+  float bf = pulse_data->b / 255.0;
 
   int num_steps = 256;
   int delay_value = 2;
@@ -92,9 +192,24 @@ void fadeColor(int r, int g, int b){
     ledcWrite(BACKLIGHT3_RED,   red);
     ledcWrite(BACKLIGHT3_GREEN, green);
     ledcWrite(BACKLIGHT3_BLUE,  blue);
-    delay(delay_value);
+    vTaskDelay(pdMS_TO_TICKS(delay_value));
   }  
+
+  portENTER_CRITICAL(&mux);
+  pulsing = false;
+  portEXIT_CRITICAL(&mux);
+
+  vTaskDelete(NULL);
 }
+
+void createPulseTask(int r, int g, int b){
+  pulse_data.r = r;
+  pulse_data.g = g;
+  pulse_data.b = b;
+
+  xTaskCreate(pulseColor, "pulse task", 2048, &pulse_data, 1, &pulseTaskHandle);
+}
+
 
 void loop() {
   // put your main code here, to run repeatedly:
@@ -103,23 +218,36 @@ void loop() {
   int dog = !digitalRead(BTN_DOG);
   int cat = !digitalRead(BTN_CAT);
 
-  if(sophia){
+  portENTER_CRITICAL(&mux);
+  auto is_pulsing = pulsing;
+  portEXIT_CRITICAL(&mux);  
+
+  if(sophia && !is_pulsing){
     Serial.println("button 1");
-    fadeColor(purple_r, purple_g, purple_b);
+    portENTER_CRITICAL(&mux);
+    pulsing = true;  
+    portEXIT_CRITICAL(&mux);
+    createPulseTask(purple_r, purple_g, purple_b);
   }
-
-  if(coffee){
+  else if(coffee && !is_pulsing){
     Serial.println("button 2");
-    fadeColor(orange_r, orange_g, orange_b);
+    portENTER_CRITICAL(&mux);
+    pulsing = true;  
+    portEXIT_CRITICAL(&mux);
+    createPulseTask(orange_r, orange_g, orange_b);
   }
-
-  if(dog){
+  else if(dog && !is_pulsing){
     Serial.println("button 3");
-    fadeColor(blue_r, blue_g, blue_b);
+    portENTER_CRITICAL(&mux);
+    pulsing = true;  
+    portEXIT_CRITICAL(&mux);  
+    createPulseTask(blue_r, blue_g, blue_b);
   }
-
-  if(cat){
+  else if(cat && !is_pulsing){
     Serial.println("button 4");
-    fadeColor(yellow_r, yellow_g, yellow_b);
+    portENTER_CRITICAL(&mux);
+    pulsing = true;  
+    portEXIT_CRITICAL(&mux);   
+    createPulseTask(yellow_r, yellow_g, yellow_b);
   }    
 }
