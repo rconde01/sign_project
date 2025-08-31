@@ -20,31 +20,80 @@
 #define LEDC_FREQ            5000    // 5 kHz PWM
 #define LEDC_RESOLUTION      8       // 8-bit (0-255)
 
-#define yellow_r 255
-#define yellow_g 255
-#define yellow_b 0
+struct Color {
+  uint8_t r;
+  uint8_t g;
+  uint8_t b;
+};
 
-#define blue_r 0
-#define blue_g 0
-#define blue_b 255
+auto const ssid         = "IronReverseSoulSteeler";
+auto const password     = "dekuposh84";
+auto const sign_host    = "sophia-signbox";
+auto const remote_host  = "sophia-remote";
+auto const sign_port    = uint16_t{4210};
+auto const local_port   = uint16_t{4211};
+auto const yellow       = Color{255,255,0};
+auto const blue         = Color{0,0,255};
+auto const purple       = Color{255,0,255};
+auto const orange       = Color{255,165,0};
 
-#define purple_r 255
-#define purple_g 0
-#define purple_b 255
+struct PulseData {
+  Color color{};
+};
 
-#define orange_r 255
-#define orange_g 165
-#define orange_b 0
+class FrtosMutex {
+public:
+  FrtosMutex():m_mux{portMUX_TYPE portMUX_INITIALIZER_UNLOCKED}{}
+private:
+  portMUX_TYPE m_mux;
 
-const char * ssid = "IronReverseSoulSteeler";
-const char * password = "dekuposh84";
-const char * SIGN_HOST = "sophia-signbox";
-const char * REMOTE_HOST = "sophia-remote";
-const uint16_t SIGN_PORT = 4210;
-const uint16_t LOCAL_PORT = 4211;
+  friend class FrtosMutexLock;
+};
 
-WiFiUDP udp{};
-IPAddress sign_ip{};
+class FrtosMutexLock {
+public:
+  FrtosMutexLock(FrtosMutex & mutex):m_mutex{mutex}{
+    portENTER_CRITICAL(&m_mutex.m_mux);
+  }
+
+  ~FrtosMutexLock(){
+    portEXIT_CRITICAL(&m_mutex.m_mux);
+  }
+
+private:
+  FrtosMutex & m_mutex;
+};
+
+template<typename T>
+class MyAtomic {
+public:
+  MyAtomic(T value):m_mutex{},m_value{value}{}
+
+  T & operator=(T value){
+    FrtosMutexLock lock(m_mutex);
+    m_value = value;
+  }
+
+  operator T() const {
+    FrtosMutexLock lock(m_mutex);
+    return m_value;
+  }
+
+private:
+  mutable FrtosMutex m_mutex;
+  T m_value;
+};
+
+struct Data {
+  WiFiUDP udp{};
+  IPAddress sign_ip{};
+  PulseData pulse_data{};
+  MyAtomic<bool> is_pulsing{false};
+  TaskHandle_t send_message_task_handle{};
+  TaskHandle_t pulse_color_task_handle{};
+};
+
+Data g_data{};
 
 void connect_wifi() {
   WiFi.mode(WIFI_STA);
@@ -111,42 +160,44 @@ void setup_leds(){
 
 void setup_mdns() {
   // Start mDNS responder (optional, but good for self-discovery)
-  if (!MDNS.begin(REMOTE_HOST)) {
+  if (!MDNS.begin(remote_host)) {
     Serial.println("Error starting mDNS responder!");
   } else {
     Serial.println("mDNS responder started");
   }
 
   Serial.print("Attempting to resolve ");
-  Serial.print(SIGN_HOST);
+  Serial.print(sign_host);
   Serial.println(".local...");
 
-  sign_ip = MDNS.queryHost(SIGN_HOST);
+  g_data.sign_ip = MDNS.queryHost(sign_host);
 
-  if (static_cast<uint32_t>(sign_ip) != 0) {
+  if (static_cast<uint32_t>(g_data.sign_ip) != 0) {
     Serial.print("Resolved ");
-    Serial.print(SIGN_HOST);
+    Serial.print(sign_host);
     Serial.print(".local to: ");
-    Serial.println(sign_ip.toString());
+    Serial.println(g_data.sign_ip.toString());
   } else {
     Serial.print("Failed to resolve ");
-    Serial.print(SIGN_HOST);
+    Serial.print(sign_host);
     Serial.println(".local");
   }
 }
 
 void setup_udp(){
-  if (!udp.begin(LOCAL_PORT)) {
+  if (!g_data.udp.begin(local_port)) {
     Serial.println("UDP begin failed!");
   } else {
     Serial.print("UDP ready on local port ");
-    Serial.println(LOCAL_PORT);
+    Serial.println(local_port);
   }
 }
 
 bool send_message_and_wait_ack(IPAddress dest, const char * msg, uint32_t timeout_ms = 400){
+  auto & udp = g_data.udp;
+
   // Send
-  if (udp.beginPacket(dest, SIGN_PORT) == 0)
+  if (udp.beginPacket(dest, sign_port) == 0)
     return false;
 
   udp.print(msg);
@@ -178,6 +229,7 @@ bool send_message_and_wait_ack(IPAddress dest, const char * msg, uint32_t timeou
 
 void send_button_message(void * data){
   auto button = reinterpret_cast<int>(data);
+  auto & sign_ip = g_data.sign_ip;
 
   switch(button){
   case 0:
@@ -197,31 +249,23 @@ void send_button_message(void * data){
   vTaskDelete(NULL);
 }
 
-TaskHandle_t sendMessageTaskHandle;
 
-void createSendMessageTask(int button){
-  xTaskCreate(send_button_message, "send message task", 4096, reinterpret_cast<void*>(button), 1, &sendMessageTaskHandle);
+void create_send_message_task(int button){
+  xTaskCreate(
+    send_button_message,
+    "send message task",
+    4096,
+    reinterpret_cast<void*>(button),
+    1,
+    &g_data.send_message_task_handle);
 }
 
-TaskHandle_t pulseTaskHandle;
+void pulse_color(void * data){
+  auto pulse_data = reinterpret_cast<PulseData *>(data);
 
-struct PulseData {
-  int r;
-  int g;
-  int b;
-};
-
-PulseData pulse_data;
-
-portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
-bool pulsing = false;
-
-void pulseColor(void * data){
-  PulseData * pulse_data = (PulseData *)data;
-
-  float rf = pulse_data->r / 255.0;
-  float gf = pulse_data->g / 255.0;
-  float bf = pulse_data->b / 255.0;
+  float rf = pulse_data->color.r / 255.0;
+  float gf = pulse_data->color.g / 255.0;
+  float bf = pulse_data->color.b / 255.0;
 
   int num_steps = 256;
   int delay_value = 2;
@@ -242,21 +286,17 @@ void pulseColor(void * data){
     ledcWrite(BACKLIGHT3_GREEN, green);
     ledcWrite(BACKLIGHT3_BLUE,  blue);
     vTaskDelay(pdMS_TO_TICKS(delay_value));
-  }  
+  }
 
-  portENTER_CRITICAL(&mux);
-  pulsing = false;
-  portEXIT_CRITICAL(&mux);
+  g_data.is_pulsing = false;
 
   vTaskDelete(NULL);
 }
 
-void createPulseTask(int r, int g, int b){
-  pulse_data.r = r;
-  pulse_data.g = g;
-  pulse_data.b = b;
+void create_pulse_task(Color color){
+  g_data.pulse_data.color = color;
 
-  xTaskCreate(pulseColor, "pulse task", 2048, &pulse_data, 1, &pulseTaskHandle);
+  xTaskCreate(pulse_color, "pulse task", 2048, &g_data.pulse_data, 1, &g_data.pulse_color_task_handle);
 }
 
 void setup() {
@@ -277,40 +317,30 @@ void loop() {
   int dog = !digitalRead(BTN_DOG);
   int cat = !digitalRead(BTN_CAT);
 
-  portENTER_CRITICAL(&mux);
-  auto is_pulsing = pulsing;
-  portEXIT_CRITICAL(&mux);  
+  bool is_pulsing = g_data.is_pulsing;
 
   if(sophia && !is_pulsing){
     Serial.println("button 1");
-    portENTER_CRITICAL(&mux);
-    pulsing = true;  
-    portEXIT_CRITICAL(&mux);
-    createPulseTask(purple_r, purple_g, purple_b);
-    createSendMessageTask(0);
+    g_data.is_pulsing = true;
+    create_pulse_task(purple);
+    create_send_message_task(0);
   }
   else if(coffee && !is_pulsing){
     Serial.println("button 2");
-    portENTER_CRITICAL(&mux);
-    pulsing = true;  
-    portEXIT_CRITICAL(&mux);
-    createPulseTask(orange_r, orange_g, orange_b);
-    createSendMessageTask(1);
+    g_data.is_pulsing = true;
+    create_pulse_task(orange);
+    create_send_message_task(1);
   }
   else if(dog && !is_pulsing){
     Serial.println("button 3");
-    portENTER_CRITICAL(&mux);
-    pulsing = true;  
-    portEXIT_CRITICAL(&mux);  
-    createPulseTask(blue_r, blue_g, blue_b);
-    createSendMessageTask(2);
+    g_data.is_pulsing = true;
+    create_pulse_task(blue);
+    create_send_message_task(2);
   }
   else if(cat && !is_pulsing){
     Serial.println("button 4");
-    portENTER_CRITICAL(&mux);
-    pulsing = true;  
-    portEXIT_CRITICAL(&mux);   
-    createPulseTask(yellow_r, yellow_g, yellow_b);
-    createSendMessageTask(3);
+    g_data.is_pulsing = true;
+    create_pulse_task(yellow);
+    create_send_message_task(3);
   }    
 }
