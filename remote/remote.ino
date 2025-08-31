@@ -1,6 +1,8 @@
 #include <WiFi.h>
 #include <ESPmDNS.h> // Or <MDNS.h> for ESP8266
 #include <WiFiUdp.h>
+#include <cmath>
+#include "action.hpp"
 
 #define BTN_SOPHIA 27
 #define BTN_COFFEE 33
@@ -36,6 +38,8 @@ auto const yellow       = Color{255,255,0};
 auto const blue         = Color{0,0,255};
 auto const purple       = Color{255,0,255};
 auto const orange       = Color{255,165,0};
+auto const red          = Color{255,0,0};
+auto const green        = Color{0,255,0};
 
 struct PulseData {
   Color color{};
@@ -251,7 +255,6 @@ void send_button_message(void * data){
   vTaskDelete(NULL);
 }
 
-
 void create_send_message_task(int button){
   xTaskCreate(
     send_button_message,
@@ -262,12 +265,10 @@ void create_send_message_task(int button){
     &g_data.send_message_task_handle);
 }
 
-void pulse_color(void * data){
-  auto pulse_data = reinterpret_cast<PulseData *>(data);
-
-  float rf = pulse_data->color.r / 255.0;
-  float gf = pulse_data->color.g / 255.0;
-  float bf = pulse_data->color.b / 255.0;
+void pulse_color(Color color){
+  float rf = color.r / 255.0;
+  float gf = color.g / 255.0;
+  float bf = color.b / 255.0;
 
   int num_steps = 256;
   int delay_value = 2;
@@ -291,6 +292,38 @@ void pulse_color(void * data){
   }
 
   g_data.is_pulsing = false;
+}
+
+void long_pulse_color_blocking(Color color){
+  int num_steps = 1024;
+  int delay_value = 2;
+
+  for(int i = 0; i < num_steps; ++i){
+    float step = 1.0f - (float)i / (float)(num_steps - 1);
+
+    auto level = sinf(4*step*M_PI);
+
+    int red = 255 - (int)(color.r*level);
+    int green = 255 - (int)(color.g*level);
+    int blue = 255 - (int)(color.b*level);
+
+    ledcWrite(BACKLIGHT1_RED,   red);
+    ledcWrite(BACKLIGHT1_GREEN, green);
+    ledcWrite(BACKLIGHT1_BLUE,  blue);
+    ledcWrite(BACKLIGHT2_RED,   red);
+    ledcWrite(BACKLIGHT2_GREEN, green);
+    ledcWrite(BACKLIGHT2_BLUE,  blue);
+    ledcWrite(BACKLIGHT3_RED,   red);
+    ledcWrite(BACKLIGHT3_GREEN, green);
+    ledcWrite(BACKLIGHT3_BLUE,  blue);
+    delay(delay_value);
+  }
+}
+
+void pulse_color_task(void * data){
+  auto pulse_data = reinterpret_cast<PulseData *>(data);
+
+  pulse_color(pulse_data->color);
 
   vTaskDelete(NULL);
 }
@@ -298,7 +331,13 @@ void pulse_color(void * data){
 void create_pulse_task(Color color){
   g_data.pulse_data.color = color;
 
-  xTaskCreate(pulse_color, "pulse task", 2048, &g_data.pulse_data, 1, &g_data.pulse_color_task_handle);
+  xTaskCreate(
+    pulse_color_task,
+    "pulse task",
+    2048,
+    &g_data.pulse_data,
+    1,
+    &g_data.pulse_color_task_handle);
 }
 
 void setup() {
@@ -320,6 +359,55 @@ void handle_button(int num, Color color){
   Serial.println("send message");
   create_send_message_task(num);
   Serial.println("done");
+}
+
+void perform_action(Action action){
+  switch(action){
+  case Action::yes:
+    long_pulse_color_blocking(green);
+    break;
+  case Action::no:
+    long_pulse_color_blocking(red);
+    break;
+  }
+}
+
+Action get_action(const char * message){
+  if (strcmp(message, "yes") == 0)
+    return Action::yes;
+
+  if (strcmp(message, "no") == 0)
+    return Action::no;
+
+  return Action::unknown;    
+}
+
+void listen_for_message(){
+  auto & udp = g_data.udp;
+
+  int packet_size = udp.parsePacket();
+  if (packet_size > 0) {
+    char buf[128];
+    int len = udp.read(buf, sizeof(buf) - 1);
+    if (len < 0)
+      return;
+    buf[len] = '\0';
+
+    IPAddress from_ip = udp.remoteIP();
+    uint16_t from_port = udp.remotePort();
+    Serial.printf("RX from %s:%u -> \"%s\"\n",
+                  from_ip.toString().c_str(), from_port, buf);
+
+    auto action = get_action(buf);
+
+    // Send ACK back to sender (same port it used)
+    udp.beginPacket(from_ip, from_port);
+    udp.print("ACK:");
+    udp.print(buf);
+    udp.endPacket();
+
+    perform_action(action);
+  }
 }
 
 void loop() {

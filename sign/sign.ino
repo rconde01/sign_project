@@ -152,6 +152,11 @@ void send_button_message(int button){
   }
 }
 
+void handle_button_press(int button){
+  send_button_message(button);
+  light_sign(-1);
+}
+
 void setup() {
   Serial.begin(115200);
   delay(2000);
@@ -185,21 +190,29 @@ void light_sign(int sign_number){
   auto const num_leds = num_signs*leds_per_sign;
 
   Color color{};
-  auto const led_start = sign_number*leds_per_sign;
-  auto const led_end = led_start + leds_per_sign - 1; 
+  auto led_start = -1;
+  auto led_end = -1;
 
   switch(sign_number){
   case 0:
     color = yellow;
+    led_start = sign_number*leds_per_sign;
+    led_end = led_start + leds_per_sign - 1; 
     break;
   case 1:
     color = blue;
+    led_start = sign_number*leds_per_sign;
+    led_end = led_start + leds_per_sign - 1; 
     break;
   case 2:
     color = purple;
+    led_start = sign_number*leds_per_sign;
+    led_end = led_start + leds_per_sign - 1; 
     break;    
   case 3:
     color = orange;
+    led_start = sign_number*leds_per_sign;
+    led_end = led_start + leds_per_sign - 1; 
     break;
   }
 
@@ -267,9 +280,9 @@ void loop() {
   listen_for_message();
 
   if(yes_btn){
-    send_button_message(1);
+    handle_button_press(1);
   }
   else if(no_btn){
-    send_button_message(0);
+    handle_button_press(0);
   }
 }
