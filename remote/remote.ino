@@ -43,21 +43,29 @@ struct PulseData {
 
 class FrtosMutex {
 public:
-  FrtosMutex():m_mux{portMUX_TYPE portMUX_INITIALIZER_UNLOCKED}{}
+  FrtosMutex(){
+    m_mux = portMUX_INITIALIZER_UNLOCKED;
+  }
+
+  void lock(){
+    portENTER_CRITICAL(&m_mux);
+  }
+
+  void unlock(){
+    portEXIT_CRITICAL(&m_mux);
+  }
 private:
   portMUX_TYPE m_mux;
-
-  friend class FrtosMutexLock;
 };
 
 class FrtosMutexLock {
 public:
   FrtosMutexLock(FrtosMutex & mutex):m_mutex{mutex}{
-    portENTER_CRITICAL(&m_mutex.m_mux);
+    m_mutex.lock();
   }
 
   ~FrtosMutexLock(){
-    portEXIT_CRITICAL(&m_mutex.m_mux);
+    m_mutex.unlock();
   }
 
 private:
@@ -69,9 +77,11 @@ class MyAtomic {
 public:
   MyAtomic(T value):m_mutex{},m_value{value}{}
 
-  T & operator=(T value){
+  MyAtomic & operator=(T value){
     FrtosMutexLock lock(m_mutex);
     m_value = value;
+
+    return *this;
   }
 
   operator T() const {
@@ -310,6 +320,16 @@ void setup() {
   setup_udp();
 }
 
+void handle_button(int num, Color color){
+  Serial.printf("button %d\n", num);
+  g_data.is_pulsing = true;
+  Serial.println("pulse");
+  create_pulse_task(color);
+  Serial.println("send message");
+  create_send_message_task(num);
+  Serial.println("done");
+}
+
 void loop() {
   // put your main code here, to run repeatedly:
   int sophia = !digitalRead(BTN_SOPHIA);
@@ -320,27 +340,15 @@ void loop() {
   bool is_pulsing = g_data.is_pulsing;
 
   if(sophia && !is_pulsing){
-    Serial.println("button 1");
-    g_data.is_pulsing = true;
-    create_pulse_task(purple);
-    create_send_message_task(0);
+    handle_button(0, purple);
   }
   else if(coffee && !is_pulsing){
-    Serial.println("button 2");
-    g_data.is_pulsing = true;
-    create_pulse_task(orange);
-    create_send_message_task(1);
+    handle_button(1, orange);
   }
   else if(dog && !is_pulsing){
-    Serial.println("button 3");
-    g_data.is_pulsing = true;
-    create_pulse_task(blue);
-    create_send_message_task(2);
+    handle_button(2, blue);
   }
   else if(cat && !is_pulsing){
-    Serial.println("button 4");
-    g_data.is_pulsing = true;
-    create_pulse_task(yellow);
-    create_send_message_task(3);
+    handle_button(3, yellow);
   }    
 }
