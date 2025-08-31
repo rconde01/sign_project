@@ -200,7 +200,7 @@ void send_button_message(void * data){
 TaskHandle_t sendMessageTaskHandle;
 
 void createSendMessageTask(int button){
-  xTaskCreate(send_button_message, "send message task", 2048, reinterpret_cast<void*>(button), 1, &sendMessageTaskHandle);
+  xTaskCreate(send_button_message, "send message task", 4096, reinterpret_cast<void*>(button), 1, &sendMessageTaskHandle);
 }
 
 TaskHandle_t pulseTaskHandle;
