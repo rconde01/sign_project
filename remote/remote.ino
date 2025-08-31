@@ -430,5 +430,7 @@ void loop() {
   }
   else if(cat && !is_pulsing){
     handle_button(3, yellow);
-  }    
+  }
+
+  listen_for_message();
 }
