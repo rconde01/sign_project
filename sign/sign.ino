@@ -245,6 +245,24 @@ void perform_action(Action action){
   }
 }
 
+bool starts_with(const char * str, const char * pattern){
+  int index = 0;
+
+  for(;;){
+    if(str[index] == '\0'){
+      return str[index] == pattern[index];
+    }
+
+    if(pattern[index] == '\0')
+      return true;
+
+    if(str[index] != pattern[index])
+      return false;
+
+    ++index;
+  }
+}
+
 void listen_for_message(){
   auto & udp = g_data.udp;
 
@@ -264,10 +282,12 @@ void listen_for_message(){
     auto action = get_action(buf);
 
     // Send ACK back to sender (same port it used)
-    udp.beginPacket(from_ip, from_port);
-    udp.print("ACK:");
-    udp.print(buf);
-    udp.endPacket();
+    if(!starts_with(buf,"ACK:")){
+      udp.beginPacket(from_ip, from_port);
+      udp.print("ACK:");
+      udp.print(buf);
+      udp.endPacket();
+    }
 
     perform_action(action);
   }
