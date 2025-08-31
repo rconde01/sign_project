@@ -31,7 +31,7 @@ auto const password     = "dekuposh84";
 auto const sign_host    = "sophia-signbox";
 auto const remote_host  = "sophia-remote";
 auto const sign_port    = uint16_t{4210};
-auto const local_port   = uint16_t{4211};
+auto const remote_port  = uint16_t{4211};
 auto const yellow       = Color{255,255,0};
 auto const blue         = Color{0,0,255};
 auto const purple       = Color{255,0,255};
@@ -172,35 +172,27 @@ void setup_mdns() {
   // Start mDNS responder (optional, but good for self-discovery)
   if (!MDNS.begin(remote_host)) {
     Serial.println("Error starting mDNS responder!");
+    MDNS.addService("msg", "udp", remote_port);
   } else {
     Serial.println("mDNS responder started");
   }
 
-  Serial.print("Attempting to resolve ");
-  Serial.print(sign_host);
-  Serial.println(".local...");
-
-  g_data.sign_ip = MDNS.queryHost(sign_host);
-
-  if (static_cast<uint32_t>(g_data.sign_ip) != 0) {
-    Serial.print("Resolved ");
+  while(static_cast<uint32_t>(g_data.sign_ip) == 0){
+    Serial.print("Attempting to resolve ");
     Serial.print(sign_host);
-    Serial.print(".local to: ");
-    Serial.println(g_data.sign_ip.toString());
-  } else {
-    Serial.print("Failed to resolve ");
-    Serial.print(sign_host);
-    Serial.println(".local");
+    Serial.println(".local...");
+    g_data.sign_ip = MDNS.queryHost(sign_host);
+    delay(1000);
   }
 }
 
 void setup_udp(){
-  if (!g_data.udp.begin(local_port)) {
-    Serial.println("UDP begin failed!");
+  if (g_data.udp.begin(remote_port)) {
+    Serial.print("Listening UDP on port ");
+    Serial.println(remote_port);
   } else {
-    Serial.print("UDP ready on local port ");
-    Serial.println(local_port);
-  }
+    Serial.println("UDP begin failed!");
+  }  
 }
 
 bool send_message_and_wait_ack(IPAddress dest, const char * msg, uint32_t timeout_ms = 400){

@@ -9,8 +9,8 @@
 #define NUM_LEDS   32
 #define BRIGHTNESS 10     // 0-255
 
-#define YES_BUTTON 33
-#define NO_BUTTON 14
+#define BTN_YES 33
+#define BTN_NO 14
 
 Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
@@ -24,7 +24,8 @@ auto const ssid         = "IronReverseSoulSteeler";
 auto const password     = "dekuposh84";
 auto const sign_host    = "sophia-signbox";
 auto const remote_host  = "sophia-remote";
-auto const listen_port  = uint16_t{4210};
+auto const sign_port    = uint16_t{4210};
+auto const remote_port  = uint16_t{4211};
 auto const yellow       = Color{255,255,0};
 auto const blue         = Color{0,0,255};
 auto const purple       = Color{255,0,255};
@@ -33,6 +34,7 @@ auto const orange       = Color{255,165,0};
 
 struct Data {
   WiFiUDP udp{};
+  IPAddress remote_ip{};
 };
 
 Data g_data{};
@@ -69,30 +71,85 @@ void setup_mdns() {
   if (MDNS.begin(sign_host)) {    // reachable as signbox.local
     Serial.println("mDNS responder started: sophia.signbox.local");
     // Optional: advertise a UDP service for discovery tools
-    MDNS.addService("msg", "udp", listen_port);
+    MDNS.addService("msg", "udp", sign_port);
   } else {
     Serial.println("mDNS start failed.");
+  }
+
+  while(static_cast<uint32_t>(g_data.remote_ip) == 0){
+    Serial.print("Attempting to resolve ");
+    Serial.print(remote_host);
+    Serial.println(".local...");
+    g_data.remote_ip = MDNS.queryHost(remote_host);
+    delay(1000);
   }
 }
 
 void setup_udp() {
-  if (g_data.udp.begin(listen_port)) {
+  if (g_data.udp.begin(sign_port)) {
     Serial.print("Listening UDP on port ");
-    Serial.println(listen_port);
+    Serial.println(sign_port);
   } else {
     Serial.println("UDP begin failed!");
   }  
 }
 
 void setup_buttons(){
-  pinMode(YES_BUTTON, INPUT_PULLUP);
-  pinMode(NO_BUTTON, INPUT_PULLUP);
+  pinMode(BTN_YES, INPUT_PULLUP);
+  pinMode(BTN_NO, INPUT_PULLUP);
 }
 
 void setup_leds(){
   strip.begin();
   strip.setBrightness(BRIGHTNESS);
   strip.show(); // Initialize all pixels to 'off'
+}
+
+bool send_message_and_wait_ack(IPAddress dest, const char * msg, uint32_t timeout_ms = 400){
+  auto & udp = g_data.udp;
+
+  // Send
+  if (udp.beginPacket(dest, remote_port) == 0)
+    return false;
+
+  udp.print(msg);
+  udp.endPacket();
+
+  uint32_t start = millis();
+  char buf[128];
+
+  // Wait for ACK on our local UDP socket
+  while (millis() - start < timeout_ms) {
+    int packetSize = udp.parsePacket();
+    if (packetSize > 0) {
+      int len = udp.read(buf, sizeof(buf) - 1);
+      if (len < 0)
+        continue;
+
+      buf[len] = '\0';
+      Serial.printf("RX ACK: \"%s\"\n", buf);
+      String expected = String("ACK:") + msg;
+      if (expected == String(buf)) {
+        return true;
+      }
+    }
+    delay(5);
+  }
+  Serial.println("ACK timeout");
+  return false;
+}
+
+void send_button_message(int button){
+  auto & remote_ip = g_data.remote_ip;
+
+  switch(button){
+  case 1:
+    send_message_and_wait_ack(remote_ip, "yes");
+    break;
+  case 0:
+    send_message_and_wait_ack(remote_ip, "no");
+    break;
+  }
 }
 
 void setup() {
@@ -204,5 +261,15 @@ void listen_for_message(){
 }
 
 void loop() {
+  int yes_btn = !digitalRead(BTN_YES);
+  int no_btn = !digitalRead(BTN_NO);
+
   listen_for_message();
+
+  if(yes_btn){
+    send_button_message(1);
+  }
+  else if(no_btn){
+    send_button_message(0);
+  }
 }
