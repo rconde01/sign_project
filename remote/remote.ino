@@ -1,6 +1,6 @@
 #include <WiFi.h>
+#include <ESPmDNS.h> // Or <MDNS.h> for ESP8266
 #include <WiFiUdp.h>
-#include <ESPmDNS.h>
 
 #define BTN_SOPHIA 27
 #define BTN_COFFEE 33
@@ -38,14 +38,15 @@
 
 const char * ssid = "IronReverseSoulSteeler";
 const char * password = "dekuposh84";
-const char * RECEIVER_HOST = "sophia.signbox";
-const char * REMOTE_HOST = "sophia.remote";
-const uint16_t RECEIVER_PORT = 4210;
+const char * SIGN_HOST = "sophia-signbox";
+const char * REMOTE_HOST = "sophia-remote";
+const uint16_t SIGN_PORT = 4210;
 const uint16_t LOCAL_PORT = 4211;
 
-WiFiUDP udp;
+WiFiUDP udp{};
+IPAddress sign_ip{};
 
-void connectWiFi() {
+void connect_wifi() {
   WiFi.mode(WIFI_STA);
   WiFi.persistent(false);
   WiFi.setAutoReconnect(true);
@@ -73,18 +74,14 @@ void connectWiFi() {
   Serial.println(WiFi.localIP());
 }
 
-void setup() {
-  // put your setup code here, to run once:
-  Serial.begin(115200);
-
-  // Give the USB/monitor some time to catch up
-  delay(2000); 
-
+void setup_buttons(){
   pinMode(BTN_SOPHIA, INPUT_PULLUP);
   pinMode(BTN_COFFEE, INPUT_PULLUP);
   pinMode(BTN_DOG, INPUT_PULLUP);
   pinMode(BTN_CAT, INPUT_PULLUP);
+}
 
+void setup_leds(){
   ledcSetClockSource(LEDC_AUTO_CLK);
 
   ledcAttachChannel(BACKLIGHT1_RED,   LEDC_FREQ, LEDC_RESOLUTION, 0);
@@ -110,21 +107,46 @@ void setup() {
   ledcWrite(BACKLIGHT3_RED,   255);
   ledcWrite(BACKLIGHT3_GREEN, 255);
   ledcWrite(BACKLIGHT3_BLUE,  255);
+}
 
-  connectWiFi();
-
-  if (!udp.begin(LOCAL_PORT)) {
-    Serial.println("UDP begin failed!");
+void setup_mdns() {
+  // Start mDNS responder (optional, but good for self-discovery)
+  if (!MDNS.begin(REMOTE_HOST)) {
+    Serial.println("Error starting mDNS responder!");
   } else {
-    Serial.print("UDP ready on local port "); Serial.println(LOCAL_PORT);
+    Serial.println("mDNS responder started");
+  }
+
+  Serial.print("Attempting to resolve ");
+  Serial.print(SIGN_HOST);
+  Serial.println(".local...");
+
+  sign_ip = MDNS.queryHost(SIGN_HOST);
+
+  if (static_cast<uint32_t>(sign_ip) != 0) {
+    Serial.print("Resolved ");
+    Serial.print(SIGN_HOST);
+    Serial.print(".local to: ");
+    Serial.println(sign_ip.toString());
+  } else {
+    Serial.print("Failed to resolve ");
+    Serial.print(SIGN_HOST);
+    Serial.println(".local");
   }
 }
 
+void setup_udp(){
+  if (!udp.begin(LOCAL_PORT)) {
+    Serial.println("UDP begin failed!");
+  } else {
+    Serial.print("UDP ready on local port ");
+    Serial.println(LOCAL_PORT);
+  }
+}
 
-
-bool sendMessageAndWaitAck(IPAddress dest, const char * msg, uint32_t timeout_ms){
+bool send_message_and_wait_ack(IPAddress dest, const char * msg, uint32_t timeout_ms = 400){
   // Send
-  if (udp.beginPacket(dest, RECEIVER_PORT) == 0)
+  if (udp.beginPacket(dest, SIGN_PORT) == 0)
     return false;
 
   udp.print(msg);
@@ -152,6 +174,33 @@ bool sendMessageAndWaitAck(IPAddress dest, const char * msg, uint32_t timeout_ms
   }
   Serial.println("ACK timeout");
   return false;
+}
+
+void send_button_message(void * data){
+  auto button = reinterpret_cast<int>(data);
+
+  switch(button){
+  case 0:
+    send_message_and_wait_ack(sign_ip, "sophia");
+    break;
+  case 1:
+    send_message_and_wait_ack(sign_ip, "coffee");
+    break;
+  case 2:
+    send_message_and_wait_ack(sign_ip, "dog");
+    break;
+  case 3:
+    send_message_and_wait_ack(sign_ip, "cat");
+    break;
+  }
+
+  vTaskDelete(NULL);
+}
+
+TaskHandle_t sendMessageTaskHandle;
+
+void createSendMessageTask(int button){
+  xTaskCreate(send_button_message, "send message task", 2048, reinterpret_cast<void*>(button), 1, &sendMessageTaskHandle);
 }
 
 TaskHandle_t pulseTaskHandle;
@@ -210,6 +259,16 @@ void createPulseTask(int r, int g, int b){
   xTaskCreate(pulseColor, "pulse task", 2048, &pulse_data, 1, &pulseTaskHandle);
 }
 
+void setup() {
+  Serial.begin(115200);
+
+  setup_buttons();
+  setup_leds();
+  connect_wifi();
+  setup_mdns();
+  // For whatever reason, we need to do this after mdns or we'll get a crash
+  setup_udp();
+}
 
 void loop() {
   // put your main code here, to run repeatedly:
@@ -228,6 +287,7 @@ void loop() {
     pulsing = true;  
     portEXIT_CRITICAL(&mux);
     createPulseTask(purple_r, purple_g, purple_b);
+    createSendMessageTask(0);
   }
   else if(coffee && !is_pulsing){
     Serial.println("button 2");
@@ -235,6 +295,7 @@ void loop() {
     pulsing = true;  
     portEXIT_CRITICAL(&mux);
     createPulseTask(orange_r, orange_g, orange_b);
+    createSendMessageTask(1);
   }
   else if(dog && !is_pulsing){
     Serial.println("button 3");
@@ -242,6 +303,7 @@ void loop() {
     pulsing = true;  
     portEXIT_CRITICAL(&mux);  
     createPulseTask(blue_r, blue_g, blue_b);
+    createSendMessageTask(2);
   }
   else if(cat && !is_pulsing){
     Serial.println("button 4");
@@ -249,5 +311,6 @@ void loop() {
     pulsing = true;  
     portEXIT_CRITICAL(&mux);   
     createPulseTask(yellow_r, yellow_g, yellow_b);
+    createSendMessageTask(3);
   }    
 }

@@ -3,6 +3,8 @@
 #include <WiFiUdp.h>
 #include <ESPmDNS.h>
 
+#include "action.hpp"
+
 #define LED_PIN    4      // A5 = GPIO 4
 #define NUM_LEDS   32    // change this to the total LEDs in all 4 strips
 #define BRIGHTNESS 10     // 0-255
@@ -30,13 +32,13 @@ Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 const char * ssid = "IronReverseSoulSteeler";
 const char * password = "dekuposh84";
-const char * RECEIVER_HOST = "sophia.signbox";
-const char * REMOTE_HOST = "sophia.remote";
+const char * SIGN_HOST = "sophia-signbox";
+const char * REMOTE_HOST = "sophia-remote";
 const uint16_t LISTEN_PORT = 4210;
 
 WiFiUDP udp;
 
-void connectWiFi() {
+void connect_wifi() {
   WiFi.mode(WIFI_STA);
   WiFi.persistent(false);
   WiFi.setAutoReconnect(true);
@@ -64,9 +66,9 @@ void connectWiFi() {
   Serial.println(WiFi.localIP());
 }
 
-void setupMDNS() {
-  if (MDNS.begin(RECEIVER_HOST)) {    // reachable as signbox.local
-    Serial.println("mDNS responder started: signbox.local");
+void setup_mdns() {
+  if (MDNS.begin(SIGN_HOST)) {    // reachable as signbox.local
+    Serial.println("mDNS responder started: sophia.signbox.local");
     // Optional: advertise a UDP service for discovery tools
     MDNS.addService("msg", "udp", LISTEN_PORT);
   } else {
@@ -74,53 +76,54 @@ void setupMDNS() {
   }
 }
 
-void setup() {
-  Serial.begin(115200);
-  delay(2000);
-
-  connectWiFi();
-  setupMDNS();
-
+void setup_udp() {
   if (udp.begin(LISTEN_PORT)) {
     Serial.print("Listening UDP on port ");
     Serial.println(LISTEN_PORT);
   } else {
     Serial.println("UDP begin failed!");
   }  
+}
 
-  strip.begin();
-  strip.setBrightness(BRIGHTNESS);
-  strip.show(); // Initialize all pixels to 'off'
-
+void setup_buttons(){
   pinMode(YES_BUTTON, INPUT_PULLUP);
   pinMode(NO_BUTTON, INPUT_PULLUP);
 }
 
-enum class Action {
-  unknown,
-  cat,
-  dog,
-  sophia,
-  coffee
+void setup_leds(){
+  strip.begin();
+  strip.setBrightness(BRIGHTNESS);
+  strip.show(); // Initialize all pixels to 'off'
 }
 
-Action getAction(const char * message){
-  if (strcmp(buf, "cat") == 0)
+void setup() {
+  Serial.begin(115200);
+  delay(2000);
+
+  setup_buttons();
+  connect_wifi();
+  setup_mdns();
+  setup_udp();
+  setup_leds();
+}
+
+Action get_action(const char * message){
+  if (strcmp(message, "cat") == 0)
     return Action::cat;
 
-  if (strcmp(buf, "dog") == 0)
-    return Action::cat;
+  if (strcmp(message, "dog") == 0)
+    return Action::dog;
 
-  if (strcmp(buf, "sophia") == 0)
-    return Action::cat;
+  if (strcmp(message, "sophia") == 0)
+    return Action::sophia;
 
-  if (strcmp(buf, "coffee") == 0)
+  if (strcmp(message, "coffee") == 0)
     return Action::coffee;
 
   return Action::unknown;    
 }
 
-void performAction(Action action){
+void perform_action(Action action){
   switch(action){
   case Action::cat:
     strip.fill(strip.Color(yellow_r, yellow_g, yellow_b));
@@ -143,34 +146,34 @@ void performAction(Action action){
   }
 }
 
-void listenForMessage(){
-  int packetSize = udp.parsePacket();
-  if (packetSize > 0) {
+void listen_for_message(){
+  int packet_size = udp.parsePacket();
+  if (packet_size > 0) {
     char buf[128];
     int len = udp.read(buf, sizeof(buf) - 1);
     if (len < 0)
       return;
     buf[len] = '\0';
 
-    IPAddress fromIP = udp.remoteIP();
-    uint16_t fromPort = udp.remotePort();
+    IPAddress from_ip = udp.remoteIP();
+    uint16_t from_port = udp.remotePort();
     Serial.printf("RX from %s:%u -> \"%s\"\n",
-                  fromIP.toString().c_str(), fromPort, buf);
+                  from_ip.toString().c_str(), from_port, buf);
 
-    auto action = getAction(buf);
+    auto action = get_action(buf);
 
     // Send ACK back to sender (same port it used)
-    udp.beginPacket(fromIP, fromPort);
+    udp.beginPacket(from_ip, from_port);
     udp.print("ACK:");
     udp.print(buf);
     udp.endPacket();
 
-    performAction(action);
+    perform_action(action);
   }
 }
 
 void loop() {
-  listenForMessage();
+  listen_for_message();
 
   // Serial.println("Turning LEDS on");
   // // Turn all LEDs on (white)
