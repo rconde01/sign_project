@@ -6,37 +6,36 @@
 #include "action.hpp"
 
 #define LED_PIN    4      // A5 = GPIO 4
-#define NUM_LEDS   32    // change this to the total LEDs in all 4 strips
+#define NUM_LEDS   32
 #define BRIGHTNESS 10     // 0-255
 
 #define YES_BUTTON 33
 #define NO_BUTTON 14
 
-#define yellow_r 255
-#define yellow_g 255
-#define yellow_b 0
-
-#define blue_r 0
-#define blue_g 0
-#define blue_b 255
-
-#define purple_r 255
-#define purple_g 0
-#define purple_b 255
-
-#define orange_r 255
-#define orange_g 165
-#define orange_b 0
-
 Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
-const char * ssid = "IronReverseSoulSteeler";
-const char * password = "dekuposh84";
-const char * SIGN_HOST = "sophia-signbox";
-const char * REMOTE_HOST = "sophia-remote";
-const uint16_t LISTEN_PORT = 4210;
+struct Color {
+  uint8_t r;
+  uint8_t g;
+  uint8_t b;
+};
 
-WiFiUDP udp;
+auto const ssid         = "IronReverseSoulSteeler";
+auto const password     = "dekuposh84";
+auto const sign_host    = "sophia-signbox";
+auto const remote_host  = "sophia-remote";
+auto const listen_port  = uint16_t{4210};
+auto const yellow       = Color{255,255,0};
+auto const blue         = Color{0,0,255};
+auto const purple       = Color{255,0,255};
+auto const orange       = Color{255,165,0};
+
+
+struct Data {
+  WiFiUDP udp{};
+};
+
+Data g_data{};
 
 void connect_wifi() {
   WiFi.mode(WIFI_STA);
@@ -67,19 +66,19 @@ void connect_wifi() {
 }
 
 void setup_mdns() {
-  if (MDNS.begin(SIGN_HOST)) {    // reachable as signbox.local
+  if (MDNS.begin(sign_host)) {    // reachable as signbox.local
     Serial.println("mDNS responder started: sophia.signbox.local");
     // Optional: advertise a UDP service for discovery tools
-    MDNS.addService("msg", "udp", LISTEN_PORT);
+    MDNS.addService("msg", "udp", listen_port);
   } else {
     Serial.println("mDNS start failed.");
   }
 }
 
 void setup_udp() {
-  if (udp.begin(LISTEN_PORT)) {
+  if (g_data.udp.begin(listen_port)) {
     Serial.print("Listening UDP on port ");
-    Serial.println(LISTEN_PORT);
+    Serial.println(listen_port);
   } else {
     Serial.println("UDP begin failed!");
   }  
@@ -123,30 +122,62 @@ Action get_action(const char * message){
   return Action::unknown;    
 }
 
+void light_sign(int sign_number){
+  auto const leds_per_sign = 8;
+  auto const num_signs = 4;
+  auto const num_leds = num_signs*leds_per_sign;
+
+  Color color{};
+  auto const led_start = sign_number*leds_per_sign;
+  auto const led_end = led_start + leds_per_sign - 1; 
+
+  switch(sign_number){
+  case 0:
+    color = yellow;
+    break;
+  case 1:
+    color = blue;
+    break;
+  case 2:
+    color = purple;
+    break;    
+  case 3:
+    color = orange;
+    break;
+  }
+
+  for(int i = 0; i < num_leds; ++i){
+    if(i >= led_start && i <= led_end){
+      strip.fill(strip.Color(color.r,color.g,color.b),i,1);
+    }
+    else {
+      strip.fill(strip.Color(0,0,0),i,1);
+    }
+  }
+
+  strip.show();
+}
+
 void perform_action(Action action){
   switch(action){
   case Action::cat:
-    strip.fill(strip.Color(yellow_r, yellow_g, yellow_b));
-    strip.show();
+    light_sign(0);
     break;
   case Action::dog:
-    strip.fill(strip.Color(blue_r, blue_g, blue_b));
-    strip.show();
+    light_sign(1);
     break;
-
   case Action::sophia:
-    strip.fill(strip.Color(purple_r, purple_g, purple_b));
-    strip.show();
+    light_sign(2);
     break;
-
   case Action::coffee:
-    strip.fill(strip.Color(orange_r, orange_g, orange_b));
-    strip.show();
+    light_sign(3);
     break;
   }
 }
 
 void listen_for_message(){
+  auto & udp = g_data.udp;
+
   int packet_size = udp.parsePacket();
   if (packet_size > 0) {
     char buf[128];
@@ -174,26 +205,4 @@ void listen_for_message(){
 
 void loop() {
   listen_for_message();
-
-  // Serial.println("Turning LEDS on");
-  // // Turn all LEDs on (white)
-  // strip.fill(strip.Color(255, 255, 255));
-  // strip.show();
-  // delay(500);
-
-  // // Turn all LEDs off
-  // Serial.println("Turning LEDS off");
-  // strip.clear();
-  // strip.show();
-  // delay(500);
-
-  // int yes = digitalRead(YES_BUTTON);
-  // int no = digitalRead(NO_BUTTON);
-  // if(!yes){
-  //   Serial.println("Yes!");
-  // }
-
-  // if(!no){
-  //   Serial.println("No!");
-  // }
 }
