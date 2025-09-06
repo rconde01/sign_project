@@ -1,10 +1,5 @@
 #pragma once
 
-// ===== Robust Remote/Sign Link for ESP32 (HUZZAH32) =====
-// Set one of these:
-// #define DEVICE_ROLE_REMOTE  // comment this for SIGN
-// #define DEVICE_ROLE_SIGN
-
 #include <WiFi.h>
 #include <AsyncUDP.h>
 
@@ -29,15 +24,6 @@ static const uint8_t  HEARTBEAT_MISSES_MAX = 3;
 
 // ---------------------------------
 
-// Build-time role string
-#if defined(DEVICE_ROLE_REMOTE)
-  const char* ROLE = "SOPHIA-REMOTE";
-#elif defined(DEVICE_ROLE_SIGN)
-  const char* ROLE = "SOPHIA-SIGN";
-#else
-  #error "Define DEVICE_ROLE_REMOTE or DEVICE_ROLE_SIGN at the top."
-#endif
-
 struct Communication {
   Communication(const char * the_role) : role(the_role){}
 
@@ -56,22 +42,6 @@ struct Communication {
 };
 
 // Globals
-
-
-// Simple debounced button for REMOTE example
-#if defined(DEVICE_ROLE_REMOTE)
-  const int BTN_PINS[] = { 27, 33, 14, 32 }; // matches your earlier wiring
-  const int NUM_BTNS = sizeof(BTN_PINS)/sizeof(BTN_PINS[0]);
-  bool lastBtnState[4] = {false,false,false,false};
-  uint32_t lastBtnChange[4] = {0,0,0,0};
-  const uint32_t DEBOUNCE_MS = 30;
-#endif
-
-// Simple LEDs for SIGN example (you can replace with your PWM code)
-#if defined(DEVICE_ROLE_SIGN)
-  const int LED_PINS[] = { 22, 25, 26, 23, 5, 4, 16, 21, 17 }; // 3x RGB as you had
-  const int NUM_LEDS = sizeof(LED_PINS)/sizeof(LED_PINS[0]);
-#endif
 
 // ---------- Helpers ----------
 String ipToStr(const IPAddress& ip) {
@@ -130,7 +100,7 @@ void onWiFiEvent(Communication & comm, WiFiEvent_t event) {
 }
 
 // ---------- Discovery ----------
-void startDiscovery(Communication & comm) {
+void startDiscovery(Communication & comm, std::function<void(String)> on_command) {
   if (comm.udpDisc.listenMulticast(DISC_GROUP, DISC_PORT)) {
     logLine("DISC", "Listening multicast on " + ipToStr(DISC_GROUP) + ":" + String(DISC_PORT));
     comm.udpDisc.onPacket([&comm](AsyncUDPPacket p) {
@@ -157,11 +127,11 @@ void startDiscovery(Communication & comm) {
       IPAddress ip;
       if (!ip.fromString(theirIP)) return;
 
-      peerIP = ip;
-      peerKnown = true;
-      missedBeats = 0;
-      lastBeatRx = millis();
-      logLine("DISC", "Peer found: " + theirRole + " id=" + theirId + " ip=" + ipToStr(peerIP));
+      comm.peerIP = ip;
+      comm.peerKnown = true;
+      comm.missedBeats = 0;
+      comm.lastBeatRx = millis();
+      logLine("DISC", "Peer found: " + theirRole + " id=" + theirId + " ip=" + ipToStr(comm.peerIP));
 
       // Try to bind unicast socket (for messages/heartbeats)
       if (!udpMsg.listen(MSG_PORT)) {
@@ -176,19 +146,13 @@ void startDiscovery(Communication & comm) {
             udpMsg.writeTo((const uint8_t*)("PONG " + msg.substring(5)).c_str(),
                            msg.length(), p.remoteIP(), MSG_PORT);
           } else if (msg.startsWith("PONG ")) {
-            lastBeatRx = millis();
-            missedBeats = 0;
+            comm.lastBeatRx = millis();
+            comm.missedBeats = 0;
           } else if (msg.startsWith("CMD ")) {
-            // Handle command (REMOTE -> SIGN) or ack (SIGN -> REMOTE)
-            // Format: CMD <name> [arg]
-            #if defined(DEVICE_ROLE_SIGN)
-              if (msg.indexOf("LIGHT") > 0) {
-                // Tiny demo: pulse an LED briefly on any LIGHT command
-                digitalWrite(LED_PINS[0], HIGH);
-              } else if (msg.indexOf("OFF") > 0) {
-                digitalWrite(LED_PINS[0], LOW);
-              }
-            #endif
+            auto cmd = msg.substring(4);
+
+            on_command(cmd);
+
             // Optionally send ACK
             String ack = "ACK " + msg.substring(4);
             udpMsg.writeTo((const uint8_t*)ack.c_str(), ack.length(), p.remoteIP(), MSG_PORT);
@@ -241,38 +205,15 @@ void heartbeatTick(Communication & comm) {
   }
 }
 
-// ---------- App Logic ----------
-#if defined(DEVICE_ROLE_REMOTE)
-void setupButtons() {
-  for (int i = 0; i < NUM_BTNS; ++i) {
-    pinMode(BTN_PINS[i], INPUT_PULLUP);
-  }
-}
-void pollButtons() {
-  uint32_t now = millis();
-  for (int i = 0; i < NUM_BTNS; ++i) {
-    bool pressed = (digitalRead(BTN_PINS[i]) == LOW);
-    if (pressed != lastBtnState[i] && now - lastBtnChange[i] > DEBOUNCE_MS) {
-      lastBtnChange[i] = now;
-      lastBtnState[i] = pressed;
-      if (pressed && peerKnown) {
-        // Example: send a LIGHT command referencing button index
-        String cmd = "CMD LIGHT " + String(i);
-        udpMsg.writeTo((const uint8_t*)cmd.c_str(), cmd.length(), peerIP, MSG_PORT);
-      }
-    }
-  }
-}
-#endif
+void sendCmdToPeer(Communication & comm, String cmd){
+  String cmd_string = "CMD " + cmd;
 
-#if defined(DEVICE_ROLE_SIGN)
-void setupLeds() {
-  for (int i = 0; i < NUM_LEDS; ++i) {
-    pinMode(LED_PINS[i], OUTPUT);
-    digitalWrite(LED_PINS[i], LOW);
-  }
+  comm.udpMsg.writeTo(
+    static_cast<const uint8_t*>(cmd_string.c_str()),
+    cmd_string.length(),
+    comm.peerIP,
+    MSG_PORT);
 }
-#endif
 
 Communication g_data(ROLE);
 
