@@ -13,18 +13,18 @@
 #define BRIGHTNESS 200     // 0-255
 
 #define BTN_YES 33
-#define BTN_NO 14d:\personal\sign_project\code\common\communication.hpp
+#define BTN_NO 14
 
 #define PIN_RX 16
 #define PIN_TX 17
 
 #define CAT_MP3 2
-#define DOG_MP3 4d:\personal\sign_project\code\sign\communication.hpp
+#define DOG_MP3 4
 #define COFFEE_MP3 5
 #define SOPHIA_MP3 1
 
 struct Color {
-  uint8_t r;d:\personal\sign_project\code\common\communication.hpp
+  uint8_t r;
   uint8_t g;
   uint8_t b;
 };
