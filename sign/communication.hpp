@@ -38,20 +38,25 @@ static const uint8_t  HEARTBEAT_MISSES_MAX = 3;
   #error "Define DEVICE_ROLE_REMOTE or DEVICE_ROLE_SIGN at the top."
 #endif
 
+struct Communication {
+  Communication(const char * the_role) : role(the_role){}
+
+  AsyncUDP      udpDisc{}; // discovery (multicast)
+  AsyncUDP      udpMsg{};  // unicast messages
+  IPAddress     peerIP{};  // learned peer IP
+  bool          peerKnown{false};
+  uint32_t      lastHello{0};
+  uint32_t      lastBeatTx{0};
+  uint32_t      lastBeatRx{0};
+  uint8_t       missedBeats{0};
+  uint32_t      lastWiFiAttempt{0};
+  uint32_t      wifiRetryMs{1000};  // backoff (caps later)
+  String        deviceId{}; // last 3 bytes of MAC
+  const char*   role{""}; // filled in by app
+};
+
 // Globals
-AsyncUDP udpDisc;     // discovery (multicast)
-AsyncUDP udpMsg;      // unicast messages
-IPAddress peerIP;     // learned peer IP
-bool peerKnown = false;
 
-uint32_t lastHello  = 0;
-uint32_t lastBeatTx = 0;
-uint32_t lastBeatRx = 0;
-uint8_t  missedBeats = 0;
-uint32_t lastWiFiAttempt = 0;
-uint32_t wifiRetryMs = 1000;  // backoff (caps later)
-
-String deviceId; // last 3 bytes of MAC
 
 // Simple debounced button for REMOTE example
 #if defined(DEVICE_ROLE_REMOTE)
@@ -88,36 +93,36 @@ void logLine(const char* tag, const String& msg) {
 }
 
 // ---------- Wi-Fi ----------
-void connectWiFiIfNeeded() {
+void connectWiFiIfNeeded(Communication & comm) {
   if (WiFi.status() == WL_CONNECTED) return;
 
   uint32_t now = millis();
-  if (now - lastWiFiAttempt < wifiRetryMs) return;
+  if (now - comm.lastWiFiAttempt < comm.wifiRetryMs) return;
 
-  lastWiFiAttempt = now;
+  comm.lastWiFiAttempt = now;
   logLine("WiFi", "Connecting to " + String(WIFI_SSID) + " ...");
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
   // backoff (1s → 2s → 4s → 8s → cap 10s)
-  wifiRetryMs = min<uint32_t>(wifiRetryMs * 2, 10000);
+  comm.wifiRetryMs = min<uint32_t>(comm.wifiRetryMs * 2, 10000);
 }
 
-void onWiFiEvent(WiFiEvent_t event) {
+void onWiFiEvent(Communication & comm, WiFiEvent_t event) {
   switch (event) {
     case ARDUINO_EVENT_WIFI_STA_CONNECTED:
       logLine("WiFi", "STA_CONNECTED");
       break;
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
       logLine("WiFi", "GOT_IP " + ipToStr(WiFi.localIP()));
-      wifiRetryMs = 1000; // reset backoff
+      comm.wifiRetryMs = 1000; // reset backoff
       break;
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
       logLine("WiFi", "DISCONNECTED, will retry");
-      peerKnown = false; // force rediscovery after we come back
-      missedBeats = 0;
-      udpDisc.close();
-      udpMsg.close();
+      comm.peerKnown = false; // force rediscovery after we come back
+      comm.missedBeats = 0;
+      comm.udpDisc.close();
+      comm.udpMsg.close();
       break;
     default:
       break;
@@ -125,10 +130,10 @@ void onWiFiEvent(WiFiEvent_t event) {
 }
 
 // ---------- Discovery ----------
-void startDiscovery() {
-  if (udpDisc.listenMulticast(DISC_GROUP, DISC_PORT)) {
+void startDiscovery(Communication & comm) {
+  if (comm.udpDisc.listenMulticast(DISC_GROUP, DISC_PORT)) {
     logLine("DISC", "Listening multicast on " + ipToStr(DISC_GROUP) + ":" + String(DISC_PORT));
-    udpDisc.onPacket([](AsyncUDPPacket p) {
+    comm.udpDisc.onPacket([&comm](AsyncUDPPacket p) {
       String msg = String((const char*)p.data(), p.length());
       // Expect: HELLO <ROLE> <deviceId> <ip>
       if (!msg.startsWith("HELLO ")) return;
@@ -145,14 +150,7 @@ void startDiscovery() {
       String theirIP   = msg.substring(p3+1);
 
       // We want the *other* role
-      bool roleOk = false;
-
-      // Accept only opposite role:
-      #if defined(DEVICE_ROLE_REMOTE)
-        roleOk = (theirRole == "SOPHIA-SIGN");
-      #elif defined(DEVICE_ROLE_SIGN)
-        roleOk = (theirRole == "SOPHIA-REMOTE");
-      #endif
+      bool roleOk = theirRole != String(comm.role);
 
       if (!roleOk) return;
 
@@ -205,39 +203,39 @@ void startDiscovery() {
   }
 }
 
-void sendHelloIfNeeded() {
+void sendHelloIfNeeded(Communication & comm) {
   uint32_t now = millis();
-  if (now - lastHello < HELLO_PERIOD_MS) return;
-  lastHello = now;
+  if (now - comm.lastHello < HELLO_PERIOD_MS) return;
+  comm.lastHello = now;
 
   if (WiFi.status() != WL_CONNECTED) return;
-  if (!udpDisc.connected()) return; // not bound yet
+  if (!comm.udpDisc.connected()) return; // not bound yet
 
-  String hello = String("HELLO ") + ROLE + " " + deviceId + " " + ipToStr(WiFi.localIP());
-  udpDisc.writeTo((const uint8_t*)hello.c_str(), hello.length(), DISC_GROUP, DISC_PORT);
+  String hello = String("HELLO ") + ROLE + " " + comm.deviceId + " " + ipToStr(WiFi.localIP());
+  comm.udpDisc.writeTo((const uint8_t*)hello.c_str(), hello.length(), DISC_GROUP, DISC_PORT);
 }
 
 // ---------- Heartbeats & link supervision ----------
-void heartbeatTick() {
-  if (!peerKnown) return;
+void heartbeatTick(Communication & comm) {
+  if (!comm.peerKnown) return;
   uint32_t now = millis();
 
   // transmit heartbeat
-  if (now - lastBeatTx >= HEARTBEAT_PERIOD_MS) {
-    lastBeatTx = now;
+  if (now - comm.lastBeatTx >= HEARTBEAT_PERIOD_MS) {
+    comm.lastBeatTx = now;
     static uint32_t seq = 1;
     String ping = String("PING ") + String(seq++);
-    udpMsg.writeTo((const uint8_t*)ping.c_str(), ping.length(), peerIP, MSG_PORT);
+    comm.udpMsg.writeTo((const uint8_t*)ping.c_str(), ping.length(), comm.peerIP, MSG_PORT);
   }
 
   // monitor receive; allow grace
-  if (now > lastBeatRx + HEARTBEAT_PERIOD_MS + HEARTBEAT_GRACE_MS) {
-    lastBeatRx = now; // move window, count miss
-    if (++missedBeats >= HEARTBEAT_MISSES_MAX) {
+  if (now > comm.lastBeatRx + HEARTBEAT_PERIOD_MS + HEARTBEAT_GRACE_MS) {
+    comm.lastBeatRx = now; // move window, count miss
+    if (++comm.missedBeats >= HEARTBEAT_MISSES_MAX) {
       logLine("LINK", "Peer timed out; returning to discovery");
-      peerKnown = false;
-      missedBeats = 0;
-      udpMsg.close();
+      comm.peerKnown = false;
+      comm.missedBeats = 0;
+      comm.udpMsg.close();
       // keep udpDisc open; HELLOs will resume
     }
   }
@@ -276,19 +274,21 @@ void setupLeds() {
 }
 #endif
 
+Communication g_data(ROLE);
+
 // ---------- Arduino Basics ----------
 void setup() {
   Serial.begin(115200);
   delay(200);
 
-  deviceId = macSuffix();
-  logLine("BOOT", String(ROLE) + " " + deviceId);
+  g_data.deviceId = macSuffix();
+  logLine("BOOT", String(ROLE) + " " + g_data.deviceId);
 
-  WiFi.onEvent(onWiFiEvent);
-  connectWiFiIfNeeded();
+  WiFi.onEvent([g_data](WiFiEvent_t event){ onWiFiEvent(g_data, event); });
+  connectWiFiIfNeeded(g_data);
 
   // Start discovery now; if Wi-Fi not ready, we’ll reopen later on GOT_IP
-  startDiscovery();
+  startDiscovery(g_data);
 
   #if defined(DEVICE_ROLE_REMOTE)
     setupButtons();
@@ -297,22 +297,20 @@ void setup() {
   #endif
 }
 
-uint32_t lastCheckUDP = 0;
-
 void loop() {
   // Wi-Fi reconnect if needed
-  connectWiFiIfNeeded();
+  connectWiFiIfNeeded(g_data);
 
   // If Wi-Fi just came back and discovery socket isn’t up, (re)start it
-  if (WiFi.status() == WL_CONNECTED && !udpDisc.connected()) {
-    startDiscovery();
+  if (WiFi.status() == WL_CONNECTED && !g_data.udpDisc.connected()) {
+    startDiscovery(g_data);
   }
 
   // Advertise presence until we know the peer
   if (!peerKnown) {
-    sendHelloIfNeeded();
+    sendHelloIfNeeded(g_data);
   } else {
-    heartbeatTick();
+    heartbeatTick(g_data);
   }
 
   // Demo app logic
