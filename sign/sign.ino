@@ -2,15 +2,52 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <ESPmDNS.h>
+#include <Arduino.h>
 
 #include "action.hpp"
 
 #define LED_PIN    4      // A5 = GPIO 4
 #define NUM_LEDS   32
-#define BRIGHTNESS 10     // 0-255
+#define BRIGHTNESS 200     // 0-255
 
 #define BTN_YES 33
 #define BTN_NO 14
+
+#define PIN_RX 16
+#define PIN_TX 17
+
+#define CAT_MP3 2
+#define DOG_MP3 4
+#define COFFEE_MP3 5
+#define SOPHIA_MP3 1
+
+HardwareSerial mp3(1);
+
+// Helper to send a 6-byte frame: 7E, CMD, 00, 02, DH, DL, EF
+void sendCmd(uint8_t cmd, uint8_t DH, uint8_t DL) {
+  uint8_t frame[7] = {0x7E, cmd, 0x00, 0x02, DH, DL, 0xEF};
+  mp3.write(frame, sizeof(frame));
+  mp3.flush();
+}
+
+// Convenience wrappers
+void mp3Play()            { sendCmd(0x0D, 0x00, 0x00); }        // Play
+void mp3Pause()           { sendCmd(0x0E, 0x00, 0x00); }        // Pause
+void mp3Stop()            { sendCmd(0x16, 0x00, 0x00); }        // Stop
+void mp3SetVolume(uint8_t level) {
+  if (level > 30) level = 30;
+  // 0x06 = set volume; DH=0x00 (no memory), DL=level (0..30)
+  sendCmd(0x06, 0x00, level);
+}
+void mp3PlayIndex(uint16_t index /*1..2999*/) {
+  Serial.printf("playing index %d\n",static_cast<uint32_t>(index));
+
+  uint8_t hi = (index >> 8) & 0xFF;
+  uint8_t lo = index & 0xFF;
+  // 0x03 = play track by global index in ROOT
+  sendCmd(0x03, hi, lo);
+}
+
 
 Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
@@ -105,6 +142,11 @@ void setup_leds(){
   strip.show(); // Initialize all pixels to 'off'
 }
 
+void setup_mp3(){
+  mp3.begin(9600, SERIAL_8N1, PIN_RX, PIN_TX);
+  mp3SetVolume(25);
+}
+
 bool send_message_and_wait_ack(IPAddress dest, const char * msg, uint32_t timeout_ms = 400){
   auto & udp = g_data.udp;
 
@@ -166,6 +208,7 @@ void setup() {
   setup_mdns();
   setup_udp();
   setup_leds();
+  setup_mp3();
 }
 
 Action get_action(const char * message){
@@ -232,15 +275,19 @@ void perform_action(Action action){
   switch(action){
   case Action::cat:
     light_sign(0);
+    mp3PlayIndex(CAT_MP3);
     break;
   case Action::dog:
     light_sign(1);
+    mp3PlayIndex(DOG_MP3);
     break;
   case Action::sophia:
     light_sign(2);
+    mp3PlayIndex(SOPHIA_MP3);
     break;
   case Action::coffee:
     light_sign(3);
+    mp3PlayIndex(COFFEE_MP3);
     break;
   }
 }

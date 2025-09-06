@@ -297,11 +297,12 @@ void pulse_color(Color color){
 void long_pulse_color_blocking(Color color){
   int num_steps = 1024;
   int delay_value = 2;
+  int num_cycles = 3;
 
   for(int i = 0; i < num_steps; ++i){
     float step = 1.0f - (float)i / (float)(num_steps - 1);
 
-    auto level = (1.0f + sinf(4*step*M_PI))/2.0;
+    auto level = 1.0f - (1.0f + cosf(num_cycles*step*2*M_PI))/2.0;
 
     int red = 255 - (int)(color.r*level);
     int green = 255 - (int)(color.g*level);
