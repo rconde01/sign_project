@@ -19,6 +19,11 @@
 #define COFFEE_MP3 5
 #define SOPHIA_MP3 1
 
+#define SOPHIA_SIGN 0
+#define DOG_SIGN 1
+#define CAT_SIGN 2
+#define COFFEE_SIGN 3
+
 struct Color {
   uint8_t r;
   uint8_t g;
@@ -81,22 +86,22 @@ void light_sign(int sign_number){
   auto led_end = -1;
 
   switch(sign_number){
-  case 0:
+  case CAT_SIGN:
     color = yellow;
     led_start = sign_number*leds_per_sign;
     led_end = led_start + leds_per_sign - 1; 
     break;
-  case 1:
+  case DOG_SIGN:
     color = blue;
     led_start = sign_number*leds_per_sign;
     led_end = led_start + leds_per_sign - 1; 
     break;
-  case 2:
+  case COFFEE_SIGN:
     color = purple;
     led_start = sign_number*leds_per_sign;
     led_end = led_start + leds_per_sign - 1; 
     break;    
-  case 3:
+  case SOPHIA_SIGN:
     color = orange;
     led_start = sign_number*leds_per_sign;
     led_end = led_start + leds_per_sign - 1; 
@@ -117,22 +122,22 @@ void light_sign(int sign_number){
 
 void execute_command(String cmd){
   if(cmd == "cat"){
-    light_sign(0);
+    light_sign(CAT_SIGN);
     mp3PlayIndex(g_data.mp3,  CAT_MP3);
     g_data.is_active = true;
   }
   else if(cmd == "dog"){
-    light_sign(1);
+    light_sign(DOG_SIGN);
     mp3PlayIndex(g_data.mp3,  DOG_MP3);
     g_data.is_active = true;
   }
   else if(cmd == "sophia"){
-    light_sign(2);
+    light_sign(SOPHIA_SIGN);
     mp3PlayIndex(g_data.mp3,  SOPHIA_MP3);
     g_data.is_active = true;
   }
   else if(cmd == "coffee"){
-    light_sign(3);
+    light_sign(COFFEE_SIGN);
     mp3PlayIndex(g_data.mp3,  COFFEE_MP3);
     g_data.is_active = true;
   }
@@ -142,9 +147,10 @@ void setup_wifi(){
   g_data.comm.deviceId = macSuffix();
   logLine("BOOT", String(g_data.comm.role) + " " + g_data.comm.deviceId);
 
-  WiFi.onEvent([](WiFiEvent_t event){ onWiFiEvent(g_data.comm, event); });
+  WiFi.onEvent([](WiFiEvent_t event){ onWiFiEvent(g_data.comm, event, execute_command); });
   connectWiFiIfNeeded(g_data.comm);
-  startDiscovery(g_data.comm, execute_command);
+  startDiscoveryRx(g_data.comm, execute_command);
+  startBroadcastRx(g_data.comm, execute_command);
 }
 
 void setup() {
@@ -160,8 +166,14 @@ void setup() {
 void loop() {
   connectWiFiIfNeeded(g_data.comm);
 
-  if(WiFi.status() == WL_CONNECTED && !g_data.comm.udpDisc.connected()){
-    startDiscovery(g_data.comm, execute_command);
+  if(WiFi.status() == WL_CONNECTED){
+    static uint32_t lastTry = 0;
+    if (!g_data.comm.udpDiscRx.connected() && millis() - lastTry > 2000) {
+      lastTry = millis(); startDiscoveryRx(g_data.comm, execute_command);
+    }
+    if (!g_data.comm.udpDiscBcastRx.connected() && millis() - lastTry > 2000) {
+      lastTry = millis(); startBroadcastRx(g_data.comm, execute_command);
+    }
   }
 
   if(!g_data.comm.peerKnown){

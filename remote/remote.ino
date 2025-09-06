@@ -262,9 +262,10 @@ void setup_wifi(){
   g_data.comm.deviceId = macSuffix();
   logLine("BOOT", String(g_data.comm.role) + " " + g_data.comm.deviceId);
 
-  WiFi.onEvent([](WiFiEvent_t event){ onWiFiEvent(g_data.comm, event); });
+  WiFi.onEvent([](WiFiEvent_t event){ onWiFiEvent(g_data.comm, event, execute_command); });
   connectWiFiIfNeeded(g_data.comm);
-  startDiscovery(g_data.comm, execute_command);
+  startDiscoveryRx(g_data.comm, execute_command);
+  startBroadcastRx(g_data.comm, execute_command);
 }
 
 void handle_button(int num, Color color){
@@ -300,8 +301,14 @@ void setup() {
 void loop() {
   connectWiFiIfNeeded(g_data.comm);
 
-  if(WiFi.status() == WL_CONNECTED && !g_data.comm.udpDisc.connected()){
-    startDiscovery(g_data.comm, execute_command);
+  if(WiFi.status() == WL_CONNECTED){
+    static uint32_t lastTry = 0;
+    if (!g_data.comm.udpDiscRx.connected() && millis() - lastTry > 2000) {
+      lastTry = millis(); startDiscoveryRx(g_data.comm, execute_command);
+    }
+    if (!g_data.comm.udpDiscBcastRx.connected() && millis() - lastTry > 2000) {
+      lastTry = millis(); startBroadcastRx(g_data.comm, execute_command);
+    }
   }
 
   if(!g_data.comm.peerKnown){
