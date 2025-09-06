@@ -265,7 +265,7 @@ void setup_wifi(){
   WiFi.onEvent([](WiFiEvent_t event){ onWiFiEvent(g_data.comm, event, execute_command); });
   connectWiFiIfNeeded(g_data.comm);
   startDiscoveryRx(g_data.comm, execute_command);
-  startBroadcastRx(g_data.comm, execute_command);
+  //startBroadcastRx(g_data.comm, execute_command);
 }
 
 void handle_button(int num, Color color){
@@ -306,9 +306,9 @@ void loop() {
     if (!g_data.comm.udpDiscRx.connected() && millis() - lastTry > 2000) {
       lastTry = millis(); startDiscoveryRx(g_data.comm, execute_command);
     }
-    if (!g_data.comm.udpDiscBcastRx.connected() && millis() - lastTry > 2000) {
-      lastTry = millis(); startBroadcastRx(g_data.comm, execute_command);
-    }
+    // if (!g_data.comm.udpDiscBcastRx.connected() && millis() - lastTry > 2000) {
+    //   lastTry = millis(); startBroadcastRx(g_data.comm, execute_command);
+    // }
   }
 
   if(!g_data.comm.peerKnown){

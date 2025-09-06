@@ -29,7 +29,7 @@ struct Communication {
 
   AsyncUDP      udpDiscRx{};        // discovery listener (multicast)
   AsyncUDP      udpDiscTx{};        // discovery sender (multicast)
-  AsyncUDP      udpDiscBcastRx{};   // discovery listener (broadcast/unicast fallback)
+  //AsyncUDP      udpDiscBcastRx{};   // discovery listener (broadcast/unicast fallback)
   AsyncUDP      udpMsg{};           // unicast messages (CMD/ACK/PING/PONG)
 
   IPAddress     peerIP{};  // learned peer IP
@@ -74,6 +74,7 @@ void connectWiFiIfNeeded(Communication & comm) {
 
   logLine("WiFi", "Connecting to " + String(WIFI_SSID) + " ...");
   WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
   // backoff (1s → 2s → 4s → 8s → cap 10s)
@@ -81,7 +82,7 @@ void connectWiFiIfNeeded(Communication & comm) {
 }
 
 void startDiscoveryRx(Communication & comm, std::function<void(String)> on_command);     // fwd
-void startBroadcastRx(Communication & comm, std::function<void(String)> on_command);     // fwd
+//void startBroadcastRx(Communication & comm, std::function<void(String)> on_command);     // fwd
 void bindMsgSocket(Communication & comm, std::function<void(String)> on_command);        // fwd
 
 void onWiFiEvent(Communication & comm, WiFiEvent_t event, std::function<void(String)> on_command) {
@@ -102,7 +103,7 @@ void onWiFiEvent(Communication & comm, WiFiEvent_t event, std::function<void(Str
 
       // (Re)join discovery listeners
       startDiscoveryRx(comm, on_command);
-      startBroadcastRx(comm, on_command);
+      //startBroadcastRx(comm, on_command);
       break;
 
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
@@ -110,7 +111,7 @@ void onWiFiEvent(Communication & comm, WiFiEvent_t event, std::function<void(Str
       comm.peerKnown = false; // force rediscovery after we come back
       comm.missedBeats = 0;
       comm.udpDiscRx.close();
-      comm.udpDiscBcastRx.close();
+      //comm.udpDiscBcastRx.close();
       comm.udpDiscTx.close();
       comm.udpMsg.close();
       break;
@@ -177,20 +178,20 @@ void startDiscoveryRx(Communication & comm, std::function<void(String)> on_comma
   }
 }
 
-void startBroadcastRx(Communication & comm, std::function<void(String)> on_command) {
-  comm.udpDiscBcastRx.close();
-  if (comm.udpDiscBcastRx.listen(DISC_PORT)) {
-    logLine("DISC", "Listening broadcast/unicast on :" + String(DISC_PORT));
-    comm.udpDiscBcastRx.onPacket([&comm, on_command](AsyncUDPPacket p) {
-      if(comm.role == "sophia-remote"){
-        //comm.lastUserActivityMs = millis();
-      }
-      handleHelloPacket(comm, p.remoteIP(), p.data(), p.length(), on_command);
-    });
-  } else {
-    logLine("DISC", "Broadcast listen failed");
-  }
-}
+// void startBroadcastRx(Communication & comm, std::function<void(String)> on_command) {
+//   comm.udpDiscBcastRx.close();
+//   if (comm.udpDiscBcastRx.listen(DISC_PORT)) {
+//     logLine("DISC", "Listening broadcast/unicast on :" + String(DISC_PORT));
+//     comm.udpDiscBcastRx.onPacket([&comm, on_command](AsyncUDPPacket p) {
+//       if(comm.role == "sophia-remote"){
+//         //comm.lastUserActivityMs = millis();
+//       }
+//       handleHelloPacket(comm, p.remoteIP(), p.data(), p.length(), on_command);
+//     });
+//   } else {
+//     logLine("DISC", "Broadcast listen failed");
+//   }
+// }
 
 void sendHelloIfNeeded(Communication & comm) {
   uint32_t now = millis();
