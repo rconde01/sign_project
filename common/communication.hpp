@@ -41,8 +41,6 @@ struct Communication {
   const char*   role{""}; // filled in by app
 };
 
-// Globals
-
 // ---------- Helpers ----------
 String ipToStr(const IPAddress& ip) {
   char buf[24];
@@ -103,7 +101,7 @@ void onWiFiEvent(Communication & comm, WiFiEvent_t event) {
 void startDiscovery(Communication & comm, std::function<void(String)> on_command) {
   if (comm.udpDisc.listenMulticast(DISC_GROUP, DISC_PORT)) {
     logLine("DISC", "Listening multicast on " + ipToStr(DISC_GROUP) + ":" + String(DISC_PORT));
-    comm.udpDisc.onPacket([&comm](AsyncUDPPacket p) {
+    comm.udpDisc.onPacket([&comm,on_command](AsyncUDPPacket p) {
       String msg = String((const char*)p.data(), p.length());
       // Expect: HELLO <ROLE> <deviceId> <ip>
       if (!msg.startsWith("HELLO ")) return;
@@ -134,16 +132,16 @@ void startDiscovery(Communication & comm, std::function<void(String)> on_command
       logLine("DISC", "Peer found: " + theirRole + " id=" + theirId + " ip=" + ipToStr(comm.peerIP));
 
       // Try to bind unicast socket (for messages/heartbeats)
-      if (!udpMsg.listen(MSG_PORT)) {
+      if (!comm.udpMsg.listen(MSG_PORT)) {
         logLine("MSG", "Failed to listen on port " + String(MSG_PORT));
       } else {
         logLine("MSG", "Listening unicast on port " + String(MSG_PORT));
-        udpMsg.onPacket([](AsyncUDPPacket p) {
+        comm.udpMsg.onPacket([&comm, on_command](AsyncUDPPacket p) {
           String msg = String((const char*)p.data(), p.length());
 
           if (msg.startsWith("PING ")) {
             // echo back PONG with same seq
-            udpMsg.writeTo((const uint8_t*)("PONG " + msg.substring(5)).c_str(),
+            comm.udpMsg.writeTo((const uint8_t*)("PONG " + msg.substring(5)).c_str(),
                            msg.length(), p.remoteIP(), MSG_PORT);
           } else if (msg.startsWith("PONG ")) {
             comm.lastBeatRx = millis();
@@ -155,7 +153,7 @@ void startDiscovery(Communication & comm, std::function<void(String)> on_command
 
             // Optionally send ACK
             String ack = "ACK " + msg.substring(4);
-            udpMsg.writeTo((const uint8_t*)ack.c_str(), ack.length(), p.remoteIP(), MSG_PORT);
+            comm.udpMsg.writeTo((const uint8_t*)ack.c_str(), ack.length(), p.remoteIP(), MSG_PORT);
           } else if (msg.startsWith("ACK ")) {
             // could track per-command acks if you want
           }
@@ -175,7 +173,7 @@ void sendHelloIfNeeded(Communication & comm) {
   if (WiFi.status() != WL_CONNECTED) return;
   if (!comm.udpDisc.connected()) return; // not bound yet
 
-  String hello = String("HELLO ") + ROLE + " " + comm.deviceId + " " + ipToStr(WiFi.localIP());
+  String hello = String("HELLO ") + comm.role + " " + comm.deviceId + " " + ipToStr(WiFi.localIP());
   comm.udpDisc.writeTo((const uint8_t*)hello.c_str(), hello.length(), DISC_GROUP, DISC_PORT);
 }
 
@@ -209,58 +207,8 @@ void sendCmdToPeer(Communication & comm, String cmd){
   String cmd_string = "CMD " + cmd;
 
   comm.udpMsg.writeTo(
-    static_cast<const uint8_t*>(cmd_string.c_str()),
+    reinterpret_cast<const uint8_t*>(cmd_string.c_str()),
     cmd_string.length(),
     comm.peerIP,
     MSG_PORT);
-}
-
-Communication g_data(ROLE);
-
-// ---------- Arduino Basics ----------
-void setup() {
-  Serial.begin(115200);
-  delay(200);
-
-  g_data.deviceId = macSuffix();
-  logLine("BOOT", String(ROLE) + " " + g_data.deviceId);
-
-  WiFi.onEvent([g_data](WiFiEvent_t event){ onWiFiEvent(g_data, event); });
-  connectWiFiIfNeeded(g_data);
-
-  // Start discovery now; if Wi-Fi not ready, we’ll reopen later on GOT_IP
-  startDiscovery(g_data);
-
-  #if defined(DEVICE_ROLE_REMOTE)
-    setupButtons();
-  #elif defined(DEVICE_ROLE_SIGN)
-    setupLeds();
-  #endif
-}
-
-void loop() {
-  // Wi-Fi reconnect if needed
-  connectWiFiIfNeeded(g_data);
-
-  // If Wi-Fi just came back and discovery socket isn’t up, (re)start it
-  if (WiFi.status() == WL_CONNECTED && !g_data.udpDisc.connected()) {
-    startDiscovery(g_data);
-  }
-
-  // Advertise presence until we know the peer
-  if (!peerKnown) {
-    sendHelloIfNeeded(g_data);
-  } else {
-    heartbeatTick(g_data);
-  }
-
-  // Demo app logic
-  #if defined(DEVICE_ROLE_REMOTE)
-    pollButtons();
-  #elif defined(DEVICE_ROLE_SIGN)
-    // (Optional) add local effects/timeout; LEDs are driven by incoming CMDs
-  #endif
-
-  // Slight yield
-  delay(5);
 }

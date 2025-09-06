@@ -1,5 +1,7 @@
 #pragma once
 
+#include <Arduino.h>
+
 // Helper to send a 6-byte frame: 7E, CMD, 00, 02, DH, DL, EF
 void mp3SendCmd(HardwareSerial &mp3, uint8_t cmd, uint8_t DH, uint8_t DL) {
   uint8_t frame[7] = {0x7E, cmd, 0x00, 0x02, DH, DL, 0xEF};

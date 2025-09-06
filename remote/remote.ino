@@ -1,8 +1,6 @@
-#include <WiFi.h>
-#include <ESPmDNS.h> // Or <MDNS.h> for ESP8266
-#include <WiFiUdp.h>
 #include <cmath>
 #include "action.hpp"
+#include "../common/communication.hpp"
 
 #define BTN_SOPHIA 27
 #define BTN_COFFEE 33
@@ -28,12 +26,6 @@ struct Color {
   uint8_t b;
 };
 
-auto const ssid         = "IronReverseSoulSteeler";
-auto const password     = "dekuposh84";
-auto const sign_host    = "sophia-signbox";
-auto const remote_host  = "sophia-remote";
-auto const sign_port    = uint16_t{4210};
-auto const remote_port  = uint16_t{4211};
 auto const yellow       = Color{255,255,0};
 auto const blue         = Color{0,0,255};
 auto const purple       = Color{255,0,255};
@@ -99,43 +91,21 @@ private:
 };
 
 struct Data {
-  WiFiUDP udp{};
-  IPAddress sign_ip{};
-  PulseData pulse_data{};
-  MyAtomic<bool> is_pulsing{false};
-  TaskHandle_t send_message_task_handle{};
-  TaskHandle_t pulse_color_task_handle{};
+  Data():
+  pulse_data{},
+  is_pulsing{false},
+  send_message_task_handle{},
+  pulse_color_task_handle{},
+  comm{"sophia-remote"}{}
+
+  PulseData       pulse_data;
+  MyAtomic<bool>  is_pulsing;
+  TaskHandle_t    send_message_task_handle;
+  TaskHandle_t    pulse_color_task_handle;
+  Communication   comm;
 };
 
 Data g_data{};
-
-void connect_wifi() {
-  WiFi.mode(WIFI_STA);
-  WiFi.persistent(false);
-  WiFi.setAutoReconnect(true);
-  WiFi.setSleep(false); // lower latency
-  WiFi.begin(ssid, password);
-
-  Serial.println("Connecting to WiFi");
-
-  // If it doesn't connect in 10 seconds, reboot and try again
-  int wait = 0;
-  int max_wait = 10000;
-
-  while (WiFi.status() != WL_CONNECTED) {
-    Serial.print(".");
-    delay(400);
-    wait += 400;
-
-    if(wait >= max_wait){
-      Serial.println("Connection Failed. Rebooting.");
-      ESP.restart();
-    }
-  }
-  Serial.println();
-  Serial.println("WiFi OK, IP: ");
-  Serial.println(WiFi.localIP());
-}
 
 void setup_buttons(){
   pinMode(BTN_SOPHIA, INPUT_PULLUP);
@@ -172,83 +142,21 @@ void setup_leds(){
   ledcWrite(BACKLIGHT3_BLUE,  255);
 }
 
-void setup_mdns() {
-  // Start mDNS responder (optional, but good for self-discovery)
-  if (!MDNS.begin(remote_host)) {
-    Serial.println("Error starting mDNS responder!");
-    MDNS.addService("msg", "udp", remote_port);
-  } else {
-    Serial.println("mDNS responder started");
-  }
-
-  while(static_cast<uint32_t>(g_data.sign_ip) == 0){
-    Serial.print("Attempting to resolve ");
-    Serial.print(sign_host);
-    Serial.println(".local...");
-    g_data.sign_ip = MDNS.queryHost(sign_host);
-    delay(1000);
-  }
-}
-
-void setup_udp(){
-  if (g_data.udp.begin(remote_port)) {
-    Serial.print("Listening UDP on port ");
-    Serial.println(remote_port);
-  } else {
-    Serial.println("UDP begin failed!");
-  }  
-}
-
-bool send_message_and_wait_ack(IPAddress dest, const char * msg, uint32_t timeout_ms = 400){
-  auto & udp = g_data.udp;
-
-  // Send
-  if (udp.beginPacket(dest, sign_port) == 0)
-    return false;
-
-  udp.print(msg);
-  udp.endPacket();
-
-  uint32_t start = millis();
-  char buf[128];
-
-  // Wait for ACK on our local UDP socket
-  while (millis() - start < timeout_ms) {
-    int packetSize = udp.parsePacket();
-    if (packetSize > 0) {
-      int len = udp.read(buf, sizeof(buf) - 1);
-      if (len < 0)
-        continue;
-
-      buf[len] = '\0';
-      Serial.printf("RX ACK: \"%s\"\n", buf);
-      String expected = String("ACK:") + msg;
-      if (expected == String(buf)) {
-        return true;
-      }
-    }
-    delay(5);
-  }
-  Serial.println("ACK timeout");
-  return false;
-}
-
 void send_button_message(void * data){
   auto button = reinterpret_cast<int>(data);
-  auto & sign_ip = g_data.sign_ip;
 
   switch(button){
   case 0:
-    send_message_and_wait_ack(sign_ip, "sophia");
+    sendCmdToPeer(g_data.comm,"sophia");
     break;
   case 1:
-    send_message_and_wait_ack(sign_ip, "coffee");
+    sendCmdToPeer(g_data.comm,"coffee");
     break;
   case 2:
-    send_message_and_wait_ack(sign_ip, "dog");
+    sendCmdToPeer(g_data.comm,"dog");
     break;
   case 3:
-    send_message_and_wait_ack(sign_ip, "cat");
+    sendCmdToPeer(g_data.comm,"cat");
     break;
   }
 
@@ -341,15 +249,22 @@ void create_pulse_task(Color color){
     &g_data.pulse_color_task_handle);
 }
 
-void setup() {
-  Serial.begin(115200);
+void execute_command(String cmd){
+  if(cmd == "yes"){
+    long_pulse_color_blocking(green);
+  }
+  else if(cmd == "no"){
+    long_pulse_color_blocking(red);
+  }
+}
 
-  setup_buttons();
-  setup_leds();
-  connect_wifi();
-  setup_mdns();
-  // For whatever reason, we need to do this after mdns or we'll get a crash
-  setup_udp();
+void setup_wifi(){
+  g_data.comm.deviceId = macSuffix();
+  logLine("BOOT", String(g_data.comm.role) + " " + g_data.comm.deviceId);
+
+  WiFi.onEvent([](WiFiEvent_t event){ onWiFiEvent(g_data.comm, event); });
+  connectWiFiIfNeeded(g_data.comm);
+  startDiscovery(g_data.comm, execute_command);
 }
 
 void handle_button(int num, Color color){
@@ -373,65 +288,29 @@ void perform_action(Action action){
   }
 }
 
-Action get_action(const char * message){
-  if (strcmp(message, "yes") == 0)
-    return Action::yes;
+void setup() {
+  Serial.begin(115200);
+  delay(2000);
 
-  if (strcmp(message, "no") == 0)
-    return Action::no;
-
-  return Action::unknown;    
-}
-
-bool starts_with(const char * str, const char * pattern){
-  int index = 0;
-
-  for(;;){
-    if(str[index] == '\0'){
-      return str[index] == pattern[index];
-    }
-
-    if(pattern[index] == '\0')
-      return true;
-
-    if(str[index] != pattern[index])
-      return false;
-
-    ++index;
-  }
-}
-
-void listen_for_message(){
-  auto & udp = g_data.udp;
-
-  int packet_size = udp.parsePacket();
-  if (packet_size > 0) {
-    char buf[128];
-    int len = udp.read(buf, sizeof(buf) - 1);
-    if (len < 0)
-      return;
-    buf[len] = '\0';
-
-    IPAddress from_ip = udp.remoteIP();
-    uint16_t from_port = udp.remotePort();
-    Serial.printf("RX from %s:%u -> \"%s\"\n",
-                  from_ip.toString().c_str(), from_port, buf);
-
-    auto action = get_action(buf);
-
-    // Send ACK back to sender (same port it used)
-    if(!starts_with(buf,"ACK:")){
-      udp.beginPacket(from_ip, from_port);
-      udp.print("ACK:");
-      udp.print(buf);
-      udp.endPacket();
-    }
-
-    perform_action(action);
-  }
+  setup_buttons();
+  setup_leds();
+  setup_wifi();
 }
 
 void loop() {
+  connectWiFiIfNeeded(g_data.comm);
+
+  if(WiFi.status() == WL_CONNECTED && !g_data.comm.udpDisc.connected()){
+    startDiscovery(g_data.comm, execute_command);
+  }
+
+  if(!g_data.comm.peerKnown){
+    sendHelloIfNeeded(g_data.comm);
+  }
+  else {
+    heartbeatTick(g_data.comm);
+  }
+
   // put your main code here, to run repeatedly:
   int sophia = !digitalRead(BTN_SOPHIA);
   int coffee = !digitalRead(BTN_COFFEE);
@@ -452,6 +331,4 @@ void loop() {
   else if(cat && !is_pulsing){
     handle_button(3, yellow);
   }
-
-  listen_for_message();
 }

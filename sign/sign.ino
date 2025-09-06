@@ -1,8 +1,4 @@
 #include <Adafruit_NeoPixel.h>
-#include <WiFi.h>
-#include <WiFiUdp.h>
-#include <ESPmDNS.h>
-#include <Arduino.h>
 
 #include "action.hpp"
 #include "mp3.hpp"
@@ -36,9 +32,9 @@ auto const orange       = Color{255,165,0};
 
 struct Data {
   Data() : 
-  mp3(1),
-  strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800),
-  comm("sophia-sign"),
+  mp3{1},
+  strip{NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800},
+  comm{"sophia-sign"},
   is_active{false} {}
 
   HardwareSerial    mp3;
@@ -67,9 +63,9 @@ void setup_mp3(){
 
 void handle_button_press(int button){
   if(button == 0)
-    sendCmdToPeer("no");
+    sendCmdToPeer(g_data.comm, "no");
   else if(button == 1)
-    sendCmdToPeer("yes");
+    sendCmdToPeer(g_data.comm, "yes");
 
   light_sign(-1);
   g_data.is_active = false;
@@ -144,7 +140,7 @@ void execute_command(String cmd){
 
 void setup_wifi(){
   g_data.comm.deviceId = macSuffix();
-  logLine("BOOT", String(g_data.comm.role) + " " + g_data.deviceId);  
+  logLine("BOOT", String(g_data.comm.role) + " " + g_data.comm.deviceId);
 
   WiFi.onEvent([](WiFiEvent_t event){ onWiFiEvent(g_data.comm, event); });
   connectWiFiIfNeeded(g_data.comm);
@@ -162,9 +158,9 @@ void setup() {
 }
 
 void loop() {
-  connectWifiIfNeeded(g_data.comm);
+  connectWiFiIfNeeded(g_data.comm);
 
-  if(WiFi.status() == WL_CONNECTED && !g_data.updDisc.connection()){
+  if(WiFi.status() == WL_CONNECTED && !g_data.comm.udpDisc.connected()){
     startDiscovery(g_data.comm, execute_command);
   }
 
