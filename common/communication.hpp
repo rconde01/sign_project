@@ -11,8 +11,8 @@
 //
 // ---------- USER CONFIG ----------
 //
-const char* WIFI_SSID     = "YourSSID";
-const char* WIFI_PASSWORD = "YourPassword";
+const char* WIFI_SSID     = "IronReverseSoulSteeler";
+const char* WIFI_PASSWORD = "dekuposh84";
 
 // Discovery multicast group/port
 static const IPAddress DISC_GROUP(239, 255, 0, 1);
@@ -31,9 +31,9 @@ static const uint8_t  HEARTBEAT_MISSES_MAX = 3;
 
 // Build-time role string
 #if defined(DEVICE_ROLE_REMOTE)
-  const char* ROLE = "REMOTE";
+  const char* ROLE = "SOPHIA-REMOTE";
 #elif defined(DEVICE_ROLE_SIGN)
-  const char* ROLE = "SIGN";
+  const char* ROLE = "SOPHIA-SIGN";
 #else
   #error "Define DEVICE_ROLE_REMOTE or DEVICE_ROLE_SIGN at the top."
 #endif
@@ -145,20 +145,13 @@ void startDiscovery() {
       String theirIP   = msg.substring(p3+1);
 
       // We want the *other* role
-      bool roleOk =
-        (#if defined(DEVICE_ROLE_REMOTE)
-           true
-         #endif
-         #if defined(DEVICE_ROLE_SIGN)
-           true
-         #endif
-        );
+      bool roleOk = false;
 
       // Accept only opposite role:
       #if defined(DEVICE_ROLE_REMOTE)
-        roleOk = (theirRole == "SIGN");
+        roleOk = (theirRole == "SOPHIA-SIGN");
       #elif defined(DEVICE_ROLE_SIGN)
-        roleOk = (theirRole == "REMOTE");
+        roleOk = (theirRole == "SOPHIA-REMOTE");
       #endif
 
       if (!roleOk) return;
