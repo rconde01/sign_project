@@ -25,76 +25,6 @@
 #define CAT_SIGN 2
 #define SOPHIA_SIGN 3
 
-WiFiServer server(TCP_PORT);
-static const int MAX_CLIENTS = 4;
-WiFiClient clients[MAX_CLIENTS];
-
-const int LED_PINS[] = {22,25,26, 23,5,4, 16,21,17};
-
-bool readLine(WiFiClient& c, String& out) {
-  while (c.available()) { char ch=(char)c.read(); if (ch=='\n') return true; if (ch!='\r') out+=ch; }
-  return false;
-}
-bool sendLine(WiFiClient& c, const String& s) {
-  if (!c.connected()) return false;
-  size_t n = c.print(s); n += c.print("\n"); return n==(s.length()+1);
-}
-
-void handleCommand(WiFiClient& c, const String& line) {
-  if (line.startsWith("PING ")) { sendLine(c, "PONG " + line.substring(5)); return; }
-  if (line.startsWith("CMD ")) {
-    // demo behavior — replace with real sign logic
-    if (line.indexOf("LIGHT")>=0) digitalWrite(LED_PINS[0], HIGH);
-    if (line.indexOf("OFF")  >=0) digitalWrite(LED_PINS[0], LOW);
-    sendLine(c, "ACK " + line.substring(4));
-  }
-}
-
-void onWiFiEvent(WiFiEvent_t e){
-  if (e==ARDUINO_EVENT_WIFI_STA_GOT_IP){
-    logLine("WiFi", "GOT_IP "+WiFi.localIP().toString());
-    if (MDNS.begin(SIGN_HOSTNAME)) {
-      MDNS.addService("sign","tcp",TCP_PORT); // _sign._tcp
-      logLine("MDNS", "sign.local up");
-    } else logLine("MDNS","begin failed");
-  } else if (e==ARDUINO_EVENT_WIFI_STA_DISCONNECTED){
-    logLine("WiFi","DISCONNECTED");
-  }
-}
-
-void setup(){
-  Serial.begin(115200); delay(150);
-  logLine("BOOT","SIGN id="+deviceId());
-  for (int i=0;i<9;i++){ pinMode(LED_PINS[i],OUTPUT); digitalWrite(LED_PINS[i],LOW); }
-
-  WiFi.onEvent(onWiFiEvent);
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-
-  server.begin(); server.setNoDelay(true);
-  logLine("TCP", "Server listening :"+String(TCP_PORT));
-}
-
-void loop(){
-  // Accept new client
-  if (WiFiClient inc = server.available()){
-    inc.setNoDelay(true);
-    int idx=-1; for (int i=0;i<MAX_CLIENTS;i++){ if (!clients[i] || !clients[i].connected()){ idx=i; break; } }
-    if (idx>=0){ clients[idx]=inc; logLine("TCP","client#"+String(idx)+" from "+inc.remoteIP().toString());
-                 sendLine(clients[idx],"HELLO SIGN"); }
-    else inc.stop();
-  }
-  // Service existing
-  for (int i=0;i<MAX_CLIENTS;i++){
-    auto &c = clients[i];
-    if (!c || !c.connected()) continue;
-    String line;
-    while (readLine(c,line)){ handleCommand(c,line); line=""; }
-  }
-  delay(2);
-}
-
 struct Color {
   uint8_t r;
   uint8_t g;
@@ -107,47 +37,58 @@ auto const purple       = Color{255,0,255};
 auto const orange       = Color{255,165,0};
 
 struct Data {
-  Data() : 
-  mp3{1},
-  strip{NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800},
-  comm{4210,4211,"sophia-sign","sophia-remote"},
-  is_active{false} {}
-
-  HardwareSerial    mp3;
-  Adafruit_NeoPixel strip;
-  Communication     comm;
-  bool              is_active;
+  HardwareSerial    mp3{1};
+  Adafruit_NeoPixel strip{NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800};
+  WiFiServer        server{TCP_PORT};
+  WiFiClient        client{};
 };
 
-Data g_data{};
+void onWiFiEvent(WiFiEvent_t e){
+  if (e == ARDUINO_EVENT_WIFI_STA_GOT_IP){
+    logLine("WiFi", "GOT_IP " + WiFi.localIP().toString());
+
+    if (MDNS.begin(SIGN_HOSTNAME)) {
+      MDNS.addService("sign","tcp",TCP_PORT); // _sign._tcp
+      logLine("MDNS", "sign.local up");
+    }
+    else {
+      logLine("MDNS","begin failed");
+    }
+  } else if (e == ARDUINO_EVENT_WIFI_STA_DISCONNECTED){
+    logLine("WiFi","DISCONNECTED");
+  }
+}
+
+void setup_wifi(){
+  WiFi.onEvent(onWiFiEvent);
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+}
+
+void setup_server(Data & data){
+  data.server.begin();
+  data.server.setNoDelay(true);
+  logLine("TCP", "Server listening :" + String(TCP_PORT));
+}
 
 void setup_buttons(){
   pinMode(BTN_YES, INPUT_PULLUP);
   pinMode(BTN_NO, INPUT_PULLUP);
 }
 
-void setup_leds(){
-  g_data.strip.begin();
-  g_data.strip.setBrightness(BRIGHTNESS);
-  g_data.strip.show(); // Initialize all pixels to 'off'
+void setup_leds(Data & data){
+  data.strip.begin();
+  data.strip.setBrightness(BRIGHTNESS);
+  data.strip.show(); // Initialize all pixels to 'off'
 }
 
-void setup_mp3(){
-  g_data.mp3.begin(9600, SERIAL_8N1, PIN_RX, PIN_TX);
-  mp3SetVolume(g_data.mp3, 25);
+void setup_mp3(Data & data){
+  data.mp3.begin(9600, SERIAL_8N1, PIN_RX, PIN_TX);
+  mp3SetVolume(data.mp3, 25);
 }
 
-void handle_button_press(int button){
-  if(button == 0)
-    send_message_and_wait_ack(g_data.comm, "no");
-  else if(button == 1)
-    send_message_and_wait_ack(g_data.comm, "yes");
-
-  light_sign(-1);
-  g_data.is_active = false;
-}
-
-void light_sign(int sign_number){
+void light_sign(Data & data, int sign_number){
   auto const leds_per_sign = 8;
   auto const num_signs = 4;
   auto const num_leds = num_signs*leds_per_sign;
@@ -181,62 +122,108 @@ void light_sign(int sign_number){
 
   for(int i = 0; i < num_leds; ++i){
     if(i >= led_start && i <= led_end){
-      g_data.strip.fill(g_data.strip.Color(color.r,color.g,color.b),i,1);
+      data.strip.fill(data.strip.Color(color.r,color.g,color.b),i,1);
     }
     else {
-      g_data.strip.fill(g_data.strip.Color(0,0,0),i,1);
+      data.strip.fill(data.strip.Color(0,0,0),i,1);
     }
   }
 
-  g_data.strip.show();
+  data.strip.show();
 }
 
-void execute_command(String cmd){
+void execute_command(Data & data, String cmd){
   if(cmd == "cat"){
-    light_sign(CAT_SIGN);
-    mp3PlayIndex(g_data.mp3,  CAT_MP3);
-    g_data.is_active = true;
+    light_sign(data, CAT_SIGN);
+    mp3PlayIndex(data.mp3,  CAT_MP3);
   }
   else if(cmd == "dog"){
-    light_sign(DOG_SIGN);
-    mp3PlayIndex(g_data.mp3,  DOG_MP3);
-    g_data.is_active = true;
+    light_sign(data, DOG_SIGN);
+    mp3PlayIndex(data.mp3,  DOG_MP3);
   }
   else if(cmd == "sophia"){
-    light_sign(SOPHIA_SIGN);
-    mp3PlayIndex(g_data.mp3,  SOPHIA_MP3);
-    g_data.is_active = true;
+    light_sign(data, SOPHIA_SIGN);
+    mp3PlayIndex(data.mp3,  SOPHIA_MP3);
   }
   else if(cmd == "coffee"){
-    light_sign(COFFEE_SIGN);
-    mp3PlayIndex(g_data.mp3,  COFFEE_MP3);
-    g_data.is_active = true;
+    light_sign(data, COFFEE_SIGN);
+    mp3PlayIndex(data.mp3,  COFFEE_MP3);
   }
 }
 
-void setup() {
+void handleCommand(Data & data, const String& line) {
+  if (line.startsWith("PING ")) {
+    sendLine(data.client, "PONG " + line.substring(5));
+    return;
+  }
+
+  if (line.startsWith("CMD ")) {
+    auto cmd = line.substring(4);
+
+    execute_command(data, cmd);
+
+    sendLine(data.client, "ACK " + line.substring(4));
+  }
+}
+
+Data g_data{};
+
+void setup(){
   Serial.begin(115200);
   delay(2000);
 
+  logLine("BOOT","SIGN id=" + deviceId());
+
   setup_buttons();
-  setup_leds();
-  setup_mp3();
-  setup_wifi(g_data.comm);
+  setup_leds(g_data);
+  setup_mp3(g_data);
+  setup_wifi();
+  setup_server(g_data);
 }
 
-void loop() {
-  if(!g_data.comm.mdns_initialized)
-    return;
+void loop(){
+  // Accept new client
+  if (WiFiClient inc = g_data.server.available()){
+    inc.setNoDelay(true);
+
+    if (!g_data.client || !g_data.client.connected()) {
+      logLine("TCP", " from " + inc.remoteIP().toString());
+    }
+    else {
+      inc.stop();
+      logLine("TCP", "rejected client from " + inc.remoteIP().toString() + " (busy)");
+      return;
+    }
+  }
+
+  if(g_data.client && g_data.client.connected()){
+    String line;
+    while (readLine(g_data.client,line)){
+      handleCommand(g_data,line);
+      line="";
+    }
+  }
 
   int yes_btn = !digitalRead(BTN_YES);
-  int no_btn = !digitalRead(BTN_NO);
+  int no_btn = !digitalRead(BTN_NO);  
 
-  listen_for_message(g_data.comm, execute_command);
+  // if(yes_btn){
+  //   handle_button_press(1);
+  // }
+  // else if(no_btn){
+  //   handle_button_press(0);
+  // }  
 
-  if(yes_btn){
-    handle_button_press(1);
-  }
-  else if(no_btn){
-    handle_button_press(0);
-  }
+  delay(2);
 }
+
+
+// void handle_button_press(int button){
+//   if(button == 0)
+//     send_message_and_wait_ack(g_data.comm, "no");
+//   else if(button == 1)
+//     send_message_and_wait_ack(g_data.comm, "yes");
+
+//   light_sign(-1);
+//   g_data.is_active = false;
+// }

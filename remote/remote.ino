@@ -128,27 +128,6 @@ bool mdnsResolveSign(Data & data){
   return false;
 }
 
-bool readLine(Data & data, String& out){
-  while (data.client.available()) {
-    char ch = (char)data.client.read();
-    
-    if (ch=='\n')
-      return true;
-
-    if (ch!='\r')
-      out += ch;
-  }
-
-  return false;
-}
-
-bool sendLine(Data & data, const String& s){
-  if (!data.client.connected()) return false;
-  size_t n = data.client.print(s);
-  n += data.client.print("\n");
-  return n==(s.length()+1);
-}
-
 void startTransaction(Data & data, int btnIndex){
   // Bring Wi-Fi up fresh each time
   wifiOn(data);
@@ -326,7 +305,7 @@ void send_button_command(Data & data, int button_index){
     return;
   }
 
-  if (sendLine(data, String("CMD ") + cmd)){
+  if (sendLine(data.client, String("CMD ") + cmd)){
     logLine("TCP","sent CMD " + cmd);
   } else {
     logLine("TCP","send failed");
@@ -427,7 +406,7 @@ void loop(){
       if (g_data.client.connected()){
         String line;
 
-        while (readLine(g_data, line)){
+        while (readLine(g_data.client, line)){
           g_data.lastRx = millis();
 
           if(line.startsWith("CMD ")){
@@ -440,7 +419,7 @@ void loop(){
         // Heartbeat during linger window (even before we flip to LINGER, harmless)
         if (millis() - g_data.lastPing >= HEARTBEAT_MS){
           g_data.lastPing = millis();
-          sendLine(g_data, String("PING ") + g_data.lastPing);
+          sendLine(g_data.client, String("PING ") + g_data.lastPing);
         }
 
         // Enter linger state immediately after connection & first send
@@ -459,7 +438,7 @@ void loop(){
 
         String line;
 
-        while (readLine(g_data, line)){
+        while (readLine(g_data.client, line)){
           g_data.lastRx = millis();
           line = "";
         }
@@ -467,7 +446,7 @@ void loop(){
         // Keepalive
         if (millis() - g_data.lastPing >= HEARTBEAT_MS){
           g_data.lastPing = millis();
-          sendLine(g_data, String("PING ") + g_data.lastPing);
+          sendLine(g_data.client, String("PING ") + g_data.lastPing);
         }
 
         // Early close if totally quiet

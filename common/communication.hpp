@@ -43,6 +43,30 @@ void startMDNS(const char* host) {
     logLine("MDNS","begin failed");
     return;
   }
-  logLine("MDNS", String("up as ")+host+".local");
+
+  logLine("MDNS", String("up as ") + host + ".local");
+}
+
+bool readLine(WiFiClient& c, String& out){
+  while (c.available()) {
+    char ch = (char)c.read();
+
+    if (ch == '\n')
+      return true;
+
+    if (ch != '\r')
+      out += ch;
+  }
+
+  return false;
+}
+
+bool sendLine(WiFiClient& c, const String& s){
+  if (!c.connected())
+    return false;
+
+  size_t n = c.print(s);
+  n += c.print("\n");
+  return n == (s.length() + 1);
 }
 
