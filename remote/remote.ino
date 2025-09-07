@@ -1,6 +1,9 @@
 #include <cmath>
+#include <array>
+
 #include "action.hpp"
 #include "../common/communication.hpp"
+#include "../common/atomic.hpp"
 
 #define BTN_SOPHIA 27
 #define BTN_COFFEE 33
@@ -20,6 +23,13 @@
 #define LEDC_FREQ            5000    // 5 kHz PWM
 #define LEDC_RESOLUTION      8       // 8-bit (0-255)
 
+// Linger time on the REMOTE after a press (ms)
+static const uint32_t REMOTE_LINGER_MS = 120000;  // 2 minutes
+// If no data at all for this long, the REMOTE closes early
+static const uint32_t REMOTE_INACTIVITY_MS = 120000; // 2 minutes
+
+std::array<int,4> BTN_PINS = {BTN_SOPHIA, BTN_COFFEE, BTN_DOG, BTN_CAT};
+
 struct Color {
   uint8_t r;
   uint8_t g;
@@ -37,81 +47,127 @@ struct PulseData {
   Color color{};
 };
 
-class FrtosMutex {
-public:
-  FrtosMutex(){
-    m_mux = portMUX_INITIALIZER_UNLOCKED;
-  }
-
-  void lock(){
-    portENTER_CRITICAL(&m_mux);
-  }
-
-  void unlock(){
-    portEXIT_CRITICAL(&m_mux);
-  }
-private:
-  portMUX_TYPE m_mux;
-};
-
-class FrtosMutexLock {
-public:
-  FrtosMutexLock(FrtosMutex & mutex):m_mutex{mutex}{
-    m_mutex.lock();
-  }
-
-  ~FrtosMutexLock(){
-    m_mutex.unlock();
-  }
-
-private:
-  FrtosMutex & m_mutex;
-};
-
-template<typename T>
-class MyAtomic {
-public:
-  MyAtomic(T value):m_mutex{},m_value{value}{}
-
-  MyAtomic & operator=(T value){
-    FrtosMutexLock lock(m_mutex);
-    m_value = value;
-
-    return *this;
-  }
-
-  operator T() const {
-    FrtosMutexLock lock(m_mutex);
-    return m_value;
-  }
-
-private:
-  mutable FrtosMutex m_mutex;
-  T m_value;
-};
+// Connection lifecycle (Wi-Fi brought up only in these states)
+enum class RState { IDLE, WIFI_UP, RESOLVING, CONNECTING, CONNECTED, LINGER, SHUTDOWN };
 
 struct Data {
-  Data():
-  pulse_data{},
-  is_pulsing{false},
-  send_message_task_handle{},
-  pulse_color_task_handle{},
-  comm{4211,4210,"sophia-remote","sophia-sign"}{}
-
-  PulseData       pulse_data;
-  MyAtomic<bool>  is_pulsing;
-  TaskHandle_t    send_message_task_handle;
-  TaskHandle_t    pulse_color_task_handle;
-  Communication   comm;
+  PulseData       pulse_data{};
+  MyAtomic<bool>  is_pulsing{false};
+  TaskHandle_t    send_message_task_handle{};
+  TaskHandle_t    pulse_color_task_handle{};
+  
+  WiFiClient      client{};
+  IPAddress       signIP{};
+  bool            mdnsReady{false};
+  uint32_t        connectedAt{0};
+  uint32_t        lastRx{0};
+  uint32_t        lastPing{0};
+  RState          state{RState::IDLE};
+  bool            wifiIsOn{false};
+  int             active_command_button_index{-1};
+  std::array<uint32_t,BTN_PINS.size()> lastEdge{0,0,0,0};
+  std::array<uint32_t,BTN_PINS.size()> lastState{0,0,0,0};
 };
 
-Data g_data{};
+void wifiOn(Data & data){
+  if (data.wifiIsOn)
+    return;
+
+  logLine("WiFi","ON");
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);               // low latency for quick transactions
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  data.wifiIsOn = true;
+  data.mdnsReady = false;
+}
+
+void wifiOff(Data & data){
+  if (!data.wifiIsOn)
+    return;
+
+  logLine("WiFi","OFF");
+  WiFi.disconnect(true, true);        // drop & erase old config
+  WiFi.mode(WIFI_OFF);
+  data.wifiIsOn = false;
+  data.mdnsReady = false;
+  data.signIP = IPAddress();
+}
+
+void onWiFiEvent(Data & data, WiFiEvent_t e){
+  if (e == ARDUINO_EVENT_WIFI_STA_GOT_IP){
+    logLine("WiFi","GOT_IP " + WiFi.localIP().toString());
+
+    // (Re)start mDNS each time we come up
+    if (MDNS.begin((String("remote-") + deviceId()).c_str())){
+      data.mdnsReady = true;
+      logLine("MDNS","ready");
+    } else {
+      data.mdnsReady = false;
+      logLine("MDNS","begin failed");
+    }
+  } else if (e == ARDUINO_EVENT_WIFI_STA_DISCONNECTED){
+    logLine("WiFi","DISCONNECTED");
+    data.mdnsReady = false;
+  }
+}
+
+bool mdnsResolveSign(Data & data){
+  if (!data.mdnsReady)
+    return false;
+
+  IPAddress ip = MDNS.queryHost(SIGN_HOSTNAME);
+
+  if (ip){
+    data.signIP = ip;
+    logLine("MDNS","sign.local -> "+ip.toString());
+    return true;
+  }
+
+  logLine("MDNS","resolve failed");
+
+  return false;
+}
+
+bool readLine(Data & data, String& out){
+  while (data.client.available()) {
+    char ch = (char)data.client.read();
+    
+    if (ch=='\n')
+      return true;
+
+    if (ch!='\r')
+      out += ch;
+  }
+
+  return false;
+}
+
+bool sendLine(Data & data, const String& s){
+  if (!data.client.connected()) return false;
+  size_t n = data.client.print(s);
+  n += data.client.print("\n");
+  return n==(s.length()+1);
+}
+
+void startTransaction(Data & data, int btnIndex){
+  // Bring Wi-Fi up fresh each time
+  wifiOn(data);
+  data.state = RState::WIFI_UP;
+  // We'll store the button index transiently in a static
+  static int pendingBtn = -1;
+  pendingBtn = btnIndex;
+
+  // Inline small state machine loop steps handled in loop()
+  // We’ll resolve, connect, send, linger, then shut down Wi-Fi.
+
+  // Attach the pending index to a global via lambda capture trick:
+  // (Simpler: reuse queued variable.)
+  // For clarity, we’ll just keep it static above and fetch it when connected.
+}
 
 void setup_buttons(){
-  pinMode(BTN_SOPHIA, INPUT_PULLUP);
-  pinMode(BTN_COFFEE, INPUT_PULLUP);
-  pinMode(BTN_DOG, INPUT_PULLUP);
-  pinMode(BTN_CAT, INPUT_PULLUP);
+  for(auto pin : BTN_PINS)
+    pinMode(pin, INPUT_PULLUP);
 }
 
 void setup_leds(){
@@ -142,38 +198,22 @@ void setup_leds(){
   ledcWrite(BACKLIGHT3_BLUE,  255);
 }
 
-void send_button_message(void * data){
-  auto button = reinterpret_cast<int>(data);
-
+Color get_button_color(int button){
   switch(button){
   case 0:
-    send_message_and_wait_ack(g_data.comm,"coffee");  
-    break;
+    return purple;
   case 1:
-    send_message_and_wait_ack(g_data.comm,"sophia");  
-    break;
+    return orange;
   case 2:
-    send_message_and_wait_ack(g_data.comm,"dog");
-    break;
+    return blue;
   case 3:
-    send_message_and_wait_ack(g_data.comm,"cat");
-    break;
+    return yellow;
+  default:
+    return {0,0,0};
   }
-
-  vTaskDelete(NULL);
 }
 
-void create_send_message_task(int button){
-  xTaskCreate(
-    send_button_message,
-    "send message task",
-    4096,
-    reinterpret_cast<void*>(button),
-    1,
-    &g_data.send_message_task_handle);
-}
-
-void pulse_color(Color color){
+void pulse_color(Data & data, Color color){
   float rf = color.r / 255.0;
   float gf = color.g / 255.0;
   float bf = color.b / 255.0;
@@ -199,7 +239,7 @@ void pulse_color(Color color){
     vTaskDelay(pdMS_TO_TICKS(delay_value));
   }
 
-  g_data.is_pulsing = false;
+  data.is_pulsing = false;
 }
 
 void long_pulse_color_blocking(Color color){
@@ -230,87 +270,236 @@ void long_pulse_color_blocking(Color color){
 }
 
 void pulse_color_task(void * data){
-  auto pulse_data = reinterpret_cast<PulseData *>(data);
+  auto the_data = reinterpret_cast<Data *>(data);
 
-  pulse_color(pulse_data->color);
+  pulse_color(*the_data, the_data->pulse_data.color);
 
   vTaskDelete(NULL);
 }
 
-void create_pulse_task(Color color){
-  g_data.pulse_data.color = color;
+void create_pulse_task(Data & data, Color color){
+  data.pulse_data.color = color;
 
   xTaskCreate(
     pulse_color_task,
     "pulse task",
     2048,
-    &g_data.pulse_data,
+    &data,
     1,
-    &g_data.pulse_color_task_handle);
+    &data.pulse_color_task_handle);
 }
 
-void execute_command(String cmd){
-  if(cmd == "yes"){
-    long_pulse_color_blocking(green);
-  }
-  else if(cmd == "no"){
-    long_pulse_color_blocking(red);
-  }
+void handle_button_press(Data & data, int button_index){
+  if(data.active_command_button_index != -1)
+    return; // already in a transaction
+
+  data.is_pulsing = true;
+  auto color = get_button_color(button_index);
+  create_pulse_task(data, color);
+
+  data.active_command_button_index = button_index;
+  startTransaction(data, button_index);
 }
 
-void handle_button(int num, Color color){
-  Serial.printf("button %d\n", num);
-  g_data.is_pulsing = true;
-  Serial.println("pulse");
-  create_pulse_task(color);
-  Serial.println("send message");
-  create_send_message_task(num);
-  Serial.println("done");
-}
+void send_button_command(Data & data, int button_index){
+  if (data.state != RState::CONNECTED)
+    return;
 
-void perform_action(Action action){
-  switch(action){
-  case Action::yes:
-    long_pulse_color_blocking(green);
+  if (button_index < 0 || button_index >= BTN_PINS.size())
+    return;
+
+  String cmd;
+  switch(button_index){
+  case 0:
+    cmd = "coffee";
     break;
-  case Action::no:
-    long_pulse_color_blocking(red);
+  case 1:
+    cmd = "sophia";
     break;
+  case 2:
+    cmd = "dog";
+    break;
+  case 3:
+    cmd = "cat";
+    break;
+  default:
+    return;
+  }
+
+  if (sendLine(data, String("CMD ") + cmd)){
+    logLine("TCP","sent CMD " + cmd);
+  } else {
+    logLine("TCP","send failed");
+    data.client.stop();
+    data.state = RState::SHUTDOWN;
   }
 }
 
-void setup() {
+void pollButtons(Data & data){
+  uint32_t now = millis();
+
+  for (int i = 0; i < BTN_PINS.size(); i++){
+    auto s = digitalRead(BTN_PINS[i]) == HIGH;
+
+    if (s != data.lastState[i] && (now - data.lastEdge[i]) > DEBOUNCE_MS){
+      data.lastEdge[i] = now;
+      data.lastState[i] = s;
+
+      if (s){ // pressed
+        handle_button_press(data, i);
+        return;
+      }
+    }
+  }
+}
+
+Data g_data{};
+
+void setup(){
   Serial.begin(115200);
   delay(2000);
 
+  logLine("BOOT","REMOTE id="+deviceId());
+
+  WiFi.onEvent([](WiFiEvent_t e) { onWiFiEvent(g_data, e); });
   setup_buttons();
   setup_leds();
-  setup_wifi(g_data.comm);
+
+  // Start with Wi-Fi fully OFF
+  wifiOff(g_data);
 }
 
-void loop() {
-  if(!g_data.comm.mdns_initialized)
+void loop(){
+  // 1) Idle: Wi-Fi OFF; just watch buttons
+  if (g_data.state == RState::IDLE || g_data.state == RState::SHUTDOWN){
+    pollButtons(g_data);
+    delay(2);
     return;
-
-  int sophia = !digitalRead(BTN_SOPHIA);
-  int coffee = !digitalRead(BTN_COFFEE);
-  int dog = !digitalRead(BTN_DOG);
-  int cat = !digitalRead(BTN_CAT);
-
-  bool is_pulsing = g_data.is_pulsing;
-
-  if(sophia && !is_pulsing){
-    handle_button(0, purple);
-  }
-  else if(coffee && !is_pulsing){
-    handle_button(1, orange);
-  }
-  else if(dog && !is_pulsing){
-    handle_button(2, blue);
-  }
-  else if(cat && !is_pulsing){
-    handle_button(3, yellow);
   }
 
-  listen_for_message(g_data.comm, execute_command);
+  // State progression
+  switch (g_data.state){
+    case RState::WIFI_UP:
+      if (WiFi.status() == WL_CONNECTED){
+        g_data.state = RState::RESOLVING;
+      }
+      break;
+
+    case RState::RESOLVING:
+      if (mdnsResolveSign(g_data)) {
+        g_data.state = RState::CONNECTING;
+      }
+      else {
+        // could retry a couple times here; for simplicity, abort
+        g_data.state = RState::SHUTDOWN;
+      }
+      break;
+
+    case RState::CONNECTING:
+      if (!g_data.signIP){
+        g_data.state = RState::SHUTDOWN;
+        break;
+      }
+
+      logLine("TCP","connect " + g_data.signIP.toString() + ":" + String(TCP_PORT));
+
+      if (g_data.client.connect(g_data.signIP, TCP_PORT, 2000)){
+        g_data.client.setNoDelay(true);
+        g_data.connectedAt = g_data.lastRx = millis();
+        g_data.lastPing = 0;
+        logLine("TCP","connected");
+        g_data.state = RState::CONNECTED;
+
+        // Send the initial command if we have one
+        if (g_data.active_command_button_index >= 0){
+          send_button_command(g_data, g_data.active_command_button_index);
+          g_data.active_command_button_index = -1;
+        }
+      } else {
+        logLine("TCP","connect failed");
+        g_data.client.stop();
+        g_data.state = RState::SHUTDOWN;
+      }
+      break;
+
+    case RState::CONNECTED:
+      // Read lines; process; then switch to LINGER
+      if (g_data.client.connected()){
+        String line;
+
+        while (readLine(g_data, line)){
+          g_data.lastRx = millis();
+
+          if(line.startsWith("CMD ")){
+            // TODO execute command
+          }
+
+          line = "";
+        }
+
+        // Heartbeat during linger window (even before we flip to LINGER, harmless)
+        if (millis() - g_data.lastPing >= HEARTBEAT_MS){
+          g_data.lastPing = millis();
+          sendLine(g_data, String("PING ") + g_data.lastPing);
+        }
+
+        // Enter linger state immediately after connection & first send
+        g_data.state = RState::LINGER;
+      } else {
+        g_data.state = RState::SHUTDOWN;
+      }
+      break;
+
+    case RState::LINGER:
+      {
+        if (!g_data.client.connected()) {
+          g_data.state = RState::SHUTDOWN;
+          break;
+        }
+
+        String line;
+
+        while (readLine(g_data, line)){
+          g_data.lastRx = millis();
+          line = "";
+        }
+
+        // Keepalive
+        if (millis() - g_data.lastPing >= HEARTBEAT_MS){
+          g_data.lastPing = millis();
+          sendLine(g_data, String("PING ") + g_data.lastPing);
+        }
+
+        // Early close if totally quiet
+        if (millis() - g_data.lastRx >= REMOTE_INACTIVITY_MS){
+          logLine("LINK","no server traffic -> close");
+          g_data.client.stop();
+          g_data.state = RState::SHUTDOWN;
+          break;
+        }
+
+        // Hard stop at linger limit
+        if (millis() - g_data.connectedAt >= REMOTE_LINGER_MS){
+          logLine("TCP","linger elapsed -> close");
+          g_data.client.stop();
+          g_data.state = RState::SHUTDOWN;
+          break;
+        }
+      }
+      break;
+
+    case RState::SHUTDOWN:
+      // Clean down: close TCP, power off Wi-Fi
+      if (g_data.client.connected())
+        g_data.client.stop();
+
+      wifiOff(g_data);
+      g_data.state = RState::IDLE;
+      break;
+
+    default:
+      break;
+  }
+
+  delay(2);
 }

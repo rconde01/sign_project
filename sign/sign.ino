@@ -25,6 +25,76 @@
 #define CAT_SIGN 2
 #define SOPHIA_SIGN 3
 
+WiFiServer server(TCP_PORT);
+static const int MAX_CLIENTS = 4;
+WiFiClient clients[MAX_CLIENTS];
+
+const int LED_PINS[] = {22,25,26, 23,5,4, 16,21,17};
+
+bool readLine(WiFiClient& c, String& out) {
+  while (c.available()) { char ch=(char)c.read(); if (ch=='\n') return true; if (ch!='\r') out+=ch; }
+  return false;
+}
+bool sendLine(WiFiClient& c, const String& s) {
+  if (!c.connected()) return false;
+  size_t n = c.print(s); n += c.print("\n"); return n==(s.length()+1);
+}
+
+void handleCommand(WiFiClient& c, const String& line) {
+  if (line.startsWith("PING ")) { sendLine(c, "PONG " + line.substring(5)); return; }
+  if (line.startsWith("CMD ")) {
+    // demo behavior — replace with real sign logic
+    if (line.indexOf("LIGHT")>=0) digitalWrite(LED_PINS[0], HIGH);
+    if (line.indexOf("OFF")  >=0) digitalWrite(LED_PINS[0], LOW);
+    sendLine(c, "ACK " + line.substring(4));
+  }
+}
+
+void onWiFiEvent(WiFiEvent_t e){
+  if (e==ARDUINO_EVENT_WIFI_STA_GOT_IP){
+    logLine("WiFi", "GOT_IP "+WiFi.localIP().toString());
+    if (MDNS.begin(SIGN_HOSTNAME)) {
+      MDNS.addService("sign","tcp",TCP_PORT); // _sign._tcp
+      logLine("MDNS", "sign.local up");
+    } else logLine("MDNS","begin failed");
+  } else if (e==ARDUINO_EVENT_WIFI_STA_DISCONNECTED){
+    logLine("WiFi","DISCONNECTED");
+  }
+}
+
+void setup(){
+  Serial.begin(115200); delay(150);
+  logLine("BOOT","SIGN id="+deviceId());
+  for (int i=0;i<9;i++){ pinMode(LED_PINS[i],OUTPUT); digitalWrite(LED_PINS[i],LOW); }
+
+  WiFi.onEvent(onWiFiEvent);
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+  server.begin(); server.setNoDelay(true);
+  logLine("TCP", "Server listening :"+String(TCP_PORT));
+}
+
+void loop(){
+  // Accept new client
+  if (WiFiClient inc = server.available()){
+    inc.setNoDelay(true);
+    int idx=-1; for (int i=0;i<MAX_CLIENTS;i++){ if (!clients[i] || !clients[i].connected()){ idx=i; break; } }
+    if (idx>=0){ clients[idx]=inc; logLine("TCP","client#"+String(idx)+" from "+inc.remoteIP().toString());
+                 sendLine(clients[idx],"HELLO SIGN"); }
+    else inc.stop();
+  }
+  // Service existing
+  for (int i=0;i<MAX_CLIENTS;i++){
+    auto &c = clients[i];
+    if (!c || !c.connected()) continue;
+    String line;
+    while (readLine(c,line)){ handleCommand(c,line); line=""; }
+  }
+  delay(2);
+}
+
 struct Color {
   uint8_t r;
   uint8_t g;
