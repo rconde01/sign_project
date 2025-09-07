@@ -112,6 +112,8 @@ void onWiFiEvent(Data & data, WiFiEvent_t e){
 }
 
 bool mdnsResolveSign(Data & data){
+  logLine("MDNS","Resolving " + String(SIGN_HOSTNAME));
+
   if (!data.mdnsReady)
     return false;
 
@@ -132,16 +134,6 @@ void startTransaction(Data & data, int btnIndex){
   // Bring Wi-Fi up fresh each time
   wifiOn(data);
   data.state = RState::WIFI_UP;
-  // We'll store the button index transiently in a static
-  static int pendingBtn = -1;
-  pendingBtn = btnIndex;
-
-  // Inline small state machine loop steps handled in loop()
-  // We’ll resolve, connect, send, linger, then shut down Wi-Fi.
-
-  // Attach the pending index to a global via lambda capture trick:
-  // (Simpler: reuse queued variable.)
-  // For clarity, we’ll just keep it static above and fetch it when connected.
 }
 
 void setup_buttons(){
@@ -269,6 +261,8 @@ void create_pulse_task(Data & data, Color color){
 }
 
 void handle_button_press(Data & data, int button_index){
+  logLine("BTN","Button Pressed");
+
   if(data.active_command_button_index != -1)
     return; // already in a transaction
 
@@ -318,7 +312,7 @@ void pollButtons(Data & data){
   uint32_t now = millis();
 
   for (int i = 0; i < BTN_PINS.size(); i++){
-    auto s = digitalRead(BTN_PINS[i]) == HIGH;
+    auto s = digitalRead(BTN_PINS[i]) == LOW;
 
     if (s != data.lastState[i] && (now - data.lastEdge[i]) > DEBOUNCE_MS){
       data.lastEdge[i] = now;
@@ -332,6 +326,11 @@ void pollButtons(Data & data){
   }
 }
 
+void setup_wifi(Data & data){
+  WiFi.onEvent([&data](WiFiEvent_t e, WiFiEventInfo_t info) { onWiFiEvent(data, e); });
+  WiFi.setAutoReconnect(true);
+}
+
 Data g_data{};
 
 void setup(){
@@ -340,7 +339,7 @@ void setup(){
 
   logLine("BOOT","REMOTE id="+deviceId());
 
-  WiFi.onEvent([](WiFiEvent_t e) { onWiFiEvent(g_data, e); });
+  setup_wifi(g_data);
   setup_buttons();
   setup_leds();
 
@@ -361,22 +360,26 @@ void loop(){
     case RState::WIFI_UP:
       if (WiFi.status() == WL_CONNECTED){
         g_data.state = RState::RESOLVING;
+        logLine("STATE","Wifi UP : Enter Resolving");
       }
       break;
 
     case RState::RESOLVING:
       if (mdnsResolveSign(g_data)) {
         g_data.state = RState::CONNECTING;
+        logLine("STATE","Resolving : Enter Connecting");
       }
       else {
         // could retry a couple times here; for simplicity, abort
         g_data.state = RState::SHUTDOWN;
+        logLine("STATE","Resolving : Enter Shutdown");
       }
       break;
 
     case RState::CONNECTING:
       if (!g_data.signIP){
         g_data.state = RState::SHUTDOWN;
+        logLine("STATE","Connecting : Enter Shutdown");
         break;
       }
 
@@ -388,6 +391,7 @@ void loop(){
         g_data.lastPing = 0;
         logLine("TCP","connected");
         g_data.state = RState::CONNECTED;
+        logLine("STATE","Connected : Enter Connected");
 
         // Send the initial command if we have one
         if (g_data.active_command_button_index >= 0){
@@ -398,6 +402,7 @@ void loop(){
         logLine("TCP","connect failed");
         g_data.client.stop();
         g_data.state = RState::SHUTDOWN;
+        logLine("STATE","Connected : Enter Shutdown");
       }
       break;
 
@@ -433,6 +438,7 @@ void loop(){
       {
         if (!g_data.client.connected()) {
           g_data.state = RState::SHUTDOWN;
+          logLine("STATE","Linger : Enter Shutdown");
           break;
         }
 
@@ -454,6 +460,7 @@ void loop(){
           logLine("LINK","no server traffic -> close");
           g_data.client.stop();
           g_data.state = RState::SHUTDOWN;
+          logLine("STATE","Linger : Enter Shutdown");          
           break;
         }
 
@@ -462,6 +469,7 @@ void loop(){
           logLine("TCP","linger elapsed -> close");
           g_data.client.stop();
           g_data.state = RState::SHUTDOWN;
+          logLine("STATE","Linger : Enter Shutdown");          
           break;
         }
       }
@@ -474,6 +482,7 @@ void loop(){
 
       wifiOff(g_data);
       g_data.state = RState::IDLE;
+      logLine("STATE","Shutdown : Enter Idle");
       break;
 
     default:

@@ -152,6 +152,8 @@ void execute_command(Data & data, String cmd){
 }
 
 void handleCommand(Data & data, const String& line) {
+  logLine("CMD", line);
+
   if (line.startsWith("PING ")) {
     sendLine(data.client, "PONG " + line.substring(5));
     return;
