@@ -301,6 +301,7 @@ void send_button_command(Data & data, int button_index){
 
   if (sendLine(data.client, String("CMD ") + cmd)){
     logLine("TCP","sent CMD " + cmd);
+    data.active_command_button_index = -1;
   } else {
     logLine("TCP","send failed");
     data.client.stop();
@@ -314,14 +315,9 @@ void pollButtons(Data & data){
   for (int i = 0; i < BTN_PINS.size(); i++){
     auto s = digitalRead(BTN_PINS[i]) == LOW;
 
-    if (s != data.lastState[i] && (now - data.lastEdge[i]) > DEBOUNCE_MS){
-      data.lastEdge[i] = now;
-      data.lastState[i] = s;
-
-      if (s){ // pressed
-        handle_button_press(data, i);
-        return;
-      }
+    if (s){ // pressed
+      handle_button_press(data, i);
+      return;
     }
   }
 }
@@ -350,10 +346,13 @@ void setup(){
 void loop(){
   // 1) Idle: Wi-Fi OFF; just watch buttons
   if (g_data.state == RState::IDLE || g_data.state == RState::SHUTDOWN){
+    logLine("STATE","IDLE");
     pollButtons(g_data);
     delay(2);
     return;
   }
+
+  logLine("STATE","Progression");
 
   // State progression
   switch (g_data.state){
@@ -424,7 +423,9 @@ void loop(){
         // Heartbeat during linger window (even before we flip to LINGER, harmless)
         if (millis() - g_data.lastPing >= HEARTBEAT_MS){
           g_data.lastPing = millis();
-          sendLine(g_data.client, String("PING ") + g_data.lastPing);
+          if(!sendLine(g_data.client, String("PING ") + g_data.lastPing)){
+            logLine("SEND","FAILED");
+          }
         }
 
         // Enter linger state immediately after connection & first send
@@ -452,7 +453,9 @@ void loop(){
         // Keepalive
         if (millis() - g_data.lastPing >= HEARTBEAT_MS){
           g_data.lastPing = millis();
-          sendLine(g_data.client, String("PING ") + g_data.lastPing);
+          if(!sendLine(g_data.client, String("PING ") + g_data.lastPing)){
+            logLine("SEND","FAILED");            
+          }
         }
 
         // Early close if totally quiet
@@ -489,5 +492,5 @@ void loop(){
       break;
   }
 
-  delay(2);
+  delay(200);
 }
