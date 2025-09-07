@@ -96,7 +96,7 @@ struct Data {
   is_pulsing{false},
   send_message_task_handle{},
   pulse_color_task_handle{},
-  comm{"sophia-remote"}{}
+  comm{4211,4210,"sophia-remote","sophia-sign"}{}
 
   PulseData       pulse_data;
   MyAtomic<bool>  is_pulsing;
@@ -147,16 +147,16 @@ void send_button_message(void * data){
 
   switch(button){
   case 0:
-    sendCmdToPeer(g_data.comm,"sophia");
+    send_message_and_wait_ack(g_data.comm,"coffee");  
     break;
   case 1:
-    sendCmdToPeer(g_data.comm,"coffee");
+    send_message_and_wait_ack(g_data.comm,"sophia");  
     break;
   case 2:
-    sendCmdToPeer(g_data.comm,"dog");
+    send_message_and_wait_ack(g_data.comm,"dog");
     break;
   case 3:
-    sendCmdToPeer(g_data.comm,"cat");
+    send_message_and_wait_ack(g_data.comm,"cat");
     break;
   }
 
@@ -258,16 +258,6 @@ void execute_command(String cmd){
   }
 }
 
-void setup_wifi(){
-  g_data.comm.deviceId = macSuffix();
-  logLine("BOOT", String(g_data.comm.role) + " " + g_data.comm.deviceId);
-
-  WiFi.onEvent([](WiFiEvent_t event){ onWiFiEvent(g_data.comm, event, execute_command); });
-  connectWiFiIfNeeded(g_data.comm);
-  startDiscoveryRx(g_data.comm, execute_command);
-  //startBroadcastRx(g_data.comm, execute_command);
-}
-
 void handle_button(int num, Color color){
   Serial.printf("button %d\n", num);
   g_data.is_pulsing = true;
@@ -295,30 +285,13 @@ void setup() {
 
   setup_buttons();
   setup_leds();
-  setup_wifi();
+  setup_wifi(g_data.comm);
 }
 
 void loop() {
-  connectWiFiIfNeeded(g_data.comm);
+  if(!g_data.comm.mdns_initialized)
+    return;
 
-  if(WiFi.status() == WL_CONNECTED){
-    static uint32_t lastTry = 0;
-    if (!g_data.comm.udpDiscRx.connected() && millis() - lastTry > 2000) {
-      lastTry = millis(); startDiscoveryRx(g_data.comm, execute_command);
-    }
-    // if (!g_data.comm.udpDiscBcastRx.connected() && millis() - lastTry > 2000) {
-    //   lastTry = millis(); startBroadcastRx(g_data.comm, execute_command);
-    // }
-  }
-
-  if(!g_data.comm.peerKnown){
-    sendHelloIfNeeded(g_data.comm);
-  }
-  else {
-    heartbeatTick(g_data.comm);
-  }
-
-  // put your main code here, to run repeatedly:
   int sophia = !digitalRead(BTN_SOPHIA);
   int coffee = !digitalRead(BTN_COFFEE);
   int dog = !digitalRead(BTN_DOG);
@@ -338,4 +311,6 @@ void loop() {
   else if(cat && !is_pulsing){
     handle_button(3, yellow);
   }
+
+  listen_for_message(g_data.comm, execute_command);
 }

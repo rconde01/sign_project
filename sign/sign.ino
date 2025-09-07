@@ -1,4 +1,5 @@
 #include <Adafruit_NeoPixel.h>
+#include <ESPmDNS.h>
 
 #include "action.hpp"
 #include "mp3.hpp"
@@ -8,8 +9,8 @@
 #define NUM_LEDS   32
 #define BRIGHTNESS 200     // 0-255
 
-#define BTN_YES 33
-#define BTN_NO 14
+#define BTN_YES 14
+#define BTN_NO 33
 
 #define PIN_RX 16
 #define PIN_TX 17
@@ -19,10 +20,10 @@
 #define COFFEE_MP3 5
 #define SOPHIA_MP3 1
 
-#define SOPHIA_SIGN 0
+#define COFFEE_SIGN 0
 #define DOG_SIGN 1
 #define CAT_SIGN 2
-#define COFFEE_SIGN 3
+#define SOPHIA_SIGN 3
 
 struct Color {
   uint8_t r;
@@ -39,7 +40,7 @@ struct Data {
   Data() : 
   mp3{1},
   strip{NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800},
-  comm{"sophia-sign"},
+  comm{4210,4211,"sophia-sign","sophia-remote"},
   is_active{false} {}
 
   HardwareSerial    mp3;
@@ -68,9 +69,9 @@ void setup_mp3(){
 
 void handle_button_press(int button){
   if(button == 0)
-    sendCmdToPeer(g_data.comm, "no");
+    send_message_and_wait_ack(g_data.comm, "no");
   else if(button == 1)
-    sendCmdToPeer(g_data.comm, "yes");
+    send_message_and_wait_ack(g_data.comm, "yes");
 
   light_sign(-1);
   g_data.is_active = false;
@@ -143,16 +144,6 @@ void execute_command(String cmd){
   }
 }
 
-void setup_wifi(){
-  g_data.comm.deviceId = macSuffix();
-  logLine("BOOT", String(g_data.comm.role) + " " + g_data.comm.deviceId);
-
-  WiFi.onEvent([](WiFiEvent_t event){ onWiFiEvent(g_data.comm, event, execute_command); });
-  connectWiFiIfNeeded(g_data.comm);
-  startDiscoveryRx(g_data.comm, execute_command);
-  //startBroadcastRx(g_data.comm, execute_command);
-}
-
 void setup() {
   Serial.begin(115200);
   delay(2000);
@@ -160,38 +151,22 @@ void setup() {
   setup_buttons();
   setup_leds();
   setup_mp3();
-  setup_wifi();
+  setup_wifi(g_data.comm);
 }
 
 void loop() {
-  connectWiFiIfNeeded(g_data.comm);
-
-  if(WiFi.status() == WL_CONNECTED){
-    static uint32_t lastTry = 0;
-    if (!g_data.comm.udpDiscRx.connected() && millis() - lastTry > 2000) {
-      lastTry = millis(); startDiscoveryRx(g_data.comm, execute_command);
-    }
-    // if (!g_data.comm.udpDiscBcastRx.connected() && millis() - lastTry > 2000) {
-    //   lastTry = millis(); startBroadcastRx(g_data.comm, execute_command);
-    // }
-  }
-
-  if(!g_data.comm.peerKnown){
-    sendHelloIfNeeded(g_data.comm);
-  }
-  else {
-    heartbeatTick(g_data.comm);
-  }
+  if(!g_data.comm.mdns_initialized)
+    return;
 
   int yes_btn = !digitalRead(BTN_YES);
   int no_btn = !digitalRead(BTN_NO);
 
-  if(yes_btn && g_data.is_active){
+  listen_for_message(g_data.comm, execute_command);
+
+  if(yes_btn){
     handle_button_press(1);
   }
-  else if(no_btn && g_data.is_active){
+  else if(no_btn){
     handle_button_press(0);
   }
-
-  delay(5);
 }
