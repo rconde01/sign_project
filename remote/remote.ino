@@ -56,13 +56,10 @@ struct PulseData {
 struct Data {
   PulseData       pulse_data{};
   MyAtomic<bool>  is_pulsing{false};
-  TaskHandle_t    send_message_task_handle{};
   TaskHandle_t    pulse_color_task_handle{};
   State           state{State::idle};
-  
   int             active_command_button_index{-1};
-  std::array<uint32_t,BTN_PINS.size()> lastEdge{0,0,0,0};
-  std::array<uint32_t,BTN_PINS.size()> lastState{0,0,0,0};
+  unsigned long   button_press_time;
 };
 
 void setup_buttons(){
@@ -113,16 +110,16 @@ Color get_button_color(int button){
   }
 }
 
-void set_color(int red, int green, int blue){
-  ledcWrite(BACKLIGHT1_RED,   red);
-  ledcWrite(BACKLIGHT1_GREEN, green);
-  ledcWrite(BACKLIGHT1_BLUE,  blue);
-  ledcWrite(BACKLIGHT2_RED,   red);
-  ledcWrite(BACKLIGHT2_GREEN, green);
-  ledcWrite(BACKLIGHT2_BLUE,  blue);
-  ledcWrite(BACKLIGHT3_RED,   red);
-  ledcWrite(BACKLIGHT3_GREEN, green);
-  ledcWrite(BACKLIGHT3_BLUE,  blue);
+void set_color(Color color){
+  ledcWrite(BACKLIGHT1_RED,   color.r);
+  ledcWrite(BACKLIGHT1_GREEN, color.g);
+  ledcWrite(BACKLIGHT1_BLUE,  color.b);
+  ledcWrite(BACKLIGHT2_RED,   color.r);
+  ledcWrite(BACKLIGHT2_GREEN, color.g);
+  ledcWrite(BACKLIGHT2_BLUE,  color.b);
+  ledcWrite(BACKLIGHT3_RED,   color.r);
+  ledcWrite(BACKLIGHT3_GREEN, color.g);
+  ledcWrite(BACKLIGHT3_BLUE,  color.b);
 }
 
 void pulse_color(Data & data, Color color){
@@ -139,7 +136,7 @@ void pulse_color(Data & data, Color color){
     int green = 255 - (int)(gf*step*255);
     int blue = 255 - (int)(bf*step*255);
 
-    set_color(red,green,blue);
+    set_color(Color{red,green,blue});
 
     vTaskDelay(pdMS_TO_TICKS(delay_value));
   }
@@ -194,15 +191,18 @@ void create_pulse_task(Data & data, Color color){
     &data.pulse_color_task_handle);
 }
 
-void handle_button_press(Data & data, int button_index){
+bool handle_button_press(Data & data, int button_index){
   if(data.active_command_button_index != -1)
-    return; // already in a transaction
+    return false; // already in a transaction
 
   data.is_pulsing = true;
   auto color = get_button_color(button_index);
   create_pulse_task(data, color);
 
   data.active_command_button_index = button_index;
+  data.button_press_time = millis();
+
+  return true;
 }
 
 bool send_button_command(Data & data, int button_index){
@@ -242,8 +242,7 @@ bool pollButtons(Data & data){
     auto s = digitalRead(BTN_PINS[i]) == LOW;
 
     if (s){ // pressed
-      handle_button_press(data, i);
-      return true;
+      return handle_button_press(data, i);
     }
   }
 
@@ -287,10 +286,13 @@ void loop(){
     case State::waiting_for_reply:
       if(!g_data.is_pulsing){
         auto button_color = get_button_color(g_data.active_command_button_index);
-        set_color(button_color.r,button_color.g,button_color.b);
+        set_color(button_color);
       }
-      g_data.state = State::idle;
-      g_data.active_command_button_index = -1;
+
+      if(millis() - g_data.button_press_time > 2000){
+        g_data.state = State::idle;
+        g_data.active_command_button_index = -1;
+      }
       break;
   }
 }
