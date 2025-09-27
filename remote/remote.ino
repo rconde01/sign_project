@@ -93,21 +93,52 @@ void wifiOff(Data & data){
   data.signIP = IPAddress();
 }
 
-void onWiFiEvent(Data & data, WiFiEvent_t e){
-  if (e == ARDUINO_EVENT_WIFI_STA_GOT_IP){
-    logLine("WiFi","GOT_IP " + WiFi.localIP().toString());
+void onWiFiEvent(Data & data, WiFiEvent_t event) {
+  Serial.printf("[WiFi-event] event: %d\n", event);
 
-    // (Re)start mDNS each time we come up
-    if (MDNS.begin((String("remote-") + deviceId()).c_str())){
-      data.mdnsReady = true;
-      logLine("MDNS","ready");
-    } else {
+  switch (event) {
+    case ARDUINO_EVENT_WIFI_READY:               Serial.println("WiFi interface ready"); break;
+    case ARDUINO_EVENT_WIFI_SCAN_DONE:           Serial.println("Completed scan for access points"); break;
+    case ARDUINO_EVENT_WIFI_STA_START:           Serial.println("WiFi client started"); break;
+    case ARDUINO_EVENT_WIFI_STA_STOP:            Serial.println("WiFi clients stopped"); break;
+    case ARDUINO_EVENT_WIFI_STA_CONNECTED:       Serial.println("Connected to access point"); break;
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:    Serial.println("Disconnected from WiFi access point"); break;
+    case ARDUINO_EVENT_WIFI_STA_AUTHMODE_CHANGE: Serial.println("Authentication mode of access point has changed"); break;
+    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+      logLine("WiFi","GOT_IP " + WiFi.localIP().toString());
+
+      // (Re)start mDNS each time we come up
+      if (MDNS.begin((String("remote-") + deviceId()).c_str())){
+        data.mdnsReady = true;
+        logLine("MDNS","ready");
+      } else {
+        data.mdnsReady = false;
+        logLine("MDNS","begin failed");
+      }
+      break;
+    case ARDUINO_EVENT_WIFI_STA_LOST_IP:        Serial.println("Lost IP address and IP address is reset to 0"); break;
+    case ARDUINO_EVENT_WPS_ER_SUCCESS:          Serial.println("WiFi Protected Setup (WPS): succeeded in enrollee mode"); break;
+    case ARDUINO_EVENT_WPS_ER_FAILED:           Serial.println("WiFi Protected Setup (WPS): failed in enrollee mode"); break;
+    case ARDUINO_EVENT_WPS_ER_TIMEOUT:          Serial.println("WiFi Protected Setup (WPS): timeout in enrollee mode"); break;
+    case ARDUINO_EVENT_WPS_ER_PIN:              Serial.println("WiFi Protected Setup (WPS): pin code in enrollee mode"); break;
+    case ARDUINO_EVENT_WIFI_AP_START:           Serial.println("WiFi access point started"); break;
+    case ARDUINO_EVENT_WIFI_AP_STOP:            Serial.println("WiFi access point  stopped"); break;
+    case ARDUINO_EVENT_WIFI_AP_STACONNECTED:    Serial.println("Client connected"); break;
+    case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
+      Serial.println("Client disconnected");    
       data.mdnsReady = false;
-      logLine("MDNS","begin failed");
-    }
-  } else if (e == ARDUINO_EVENT_WIFI_STA_DISCONNECTED){
-    logLine("WiFi","DISCONNECTED");
-    data.mdnsReady = false;
+      break;
+    case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED:   Serial.println("Assigned IP address to client"); break;
+    case ARDUINO_EVENT_WIFI_AP_PROBEREQRECVED:  Serial.println("Received probe request"); break;
+    case ARDUINO_EVENT_WIFI_AP_GOT_IP6:         Serial.println("AP IPv6 is preferred"); break;
+    case ARDUINO_EVENT_WIFI_STA_GOT_IP6:        Serial.println("STA IPv6 is preferred"); break;
+    case ARDUINO_EVENT_ETH_GOT_IP6:             Serial.println("Ethernet IPv6 is preferred"); break;
+    case ARDUINO_EVENT_ETH_START:               Serial.println("Ethernet started"); break;
+    case ARDUINO_EVENT_ETH_STOP:                Serial.println("Ethernet stopped"); break;
+    case ARDUINO_EVENT_ETH_CONNECTED:           Serial.println("Ethernet connected"); break;
+    case ARDUINO_EVENT_ETH_DISCONNECTED:        Serial.println("Ethernet disconnected"); break;
+    case ARDUINO_EVENT_ETH_GOT_IP:              Serial.println("Obtained IP address"); break;
+    default:                                    break;
   }
 }
 
@@ -184,6 +215,18 @@ Color get_button_color(int button){
   }
 }
 
+void set_color(int red, int green, int blue){
+  ledcWrite(BACKLIGHT1_RED,   red);
+  ledcWrite(BACKLIGHT1_GREEN, green);
+  ledcWrite(BACKLIGHT1_BLUE,  blue);
+  ledcWrite(BACKLIGHT2_RED,   red);
+  ledcWrite(BACKLIGHT2_GREEN, green);
+  ledcWrite(BACKLIGHT2_BLUE,  blue);
+  ledcWrite(BACKLIGHT3_RED,   red);
+  ledcWrite(BACKLIGHT3_GREEN, green);
+  ledcWrite(BACKLIGHT3_BLUE,  blue);
+}
+
 void pulse_color(Data & data, Color color){
   float rf = color.r / 255.0;
   float gf = color.g / 255.0;
@@ -198,15 +241,8 @@ void pulse_color(Data & data, Color color){
     int green = 255 - (int)(gf*step*255);
     int blue = 255 - (int)(bf*step*255);
 
-    ledcWrite(BACKLIGHT1_RED,   red);
-    ledcWrite(BACKLIGHT1_GREEN, green);
-    ledcWrite(BACKLIGHT1_BLUE,  blue);
-    ledcWrite(BACKLIGHT2_RED,   red);
-    ledcWrite(BACKLIGHT2_GREEN, green);
-    ledcWrite(BACKLIGHT2_BLUE,  blue);
-    ledcWrite(BACKLIGHT3_RED,   red);
-    ledcWrite(BACKLIGHT3_GREEN, green);
-    ledcWrite(BACKLIGHT3_BLUE,  blue);
+    set_color(red,green,blue);
+
     vTaskDelay(pdMS_TO_TICKS(delay_value));
   }
 
@@ -274,12 +310,18 @@ void handle_button_press(Data & data, int button_index){
   startTransaction(data, button_index);
 }
 
-void send_button_command(Data & data, int button_index){
-  if (data.state != RState::CONNECTED)
-    return;
+bool send_button_command(Data & data, int button_index){
+  Serial.println(("Sending Button Commmand"));
 
-  if (button_index < 0 || button_index >= BTN_PINS.size())
-    return;
+  if (data.state != RState::CONNECTED){
+    Serial.println(("Sending Button Commmand: Failure: Not Connected"));
+    return false;
+  }
+
+  if (button_index < 0 || button_index >= BTN_PINS.size()){
+    Serial.println(("Sending Button Commmand: Failure: Unknown Button"));
+    return false;
+  }
 
   String cmd;
   switch(button_index){
@@ -296,17 +338,18 @@ void send_button_command(Data & data, int button_index){
     cmd = "cat";
     break;
   default:
-    return;
+    Serial.println(("Sending Button Commmand: Failure: Unknown Button"));
+    return false;
   }
 
-  if (sendLine(data.client, String("CMD ") + cmd)){
-    logLine("TCP","sent CMD " + cmd);
-    data.active_command_button_index = -1;
-  } else {
-    logLine("TCP","send failed");
-    data.client.stop();
-    data.state = RState::SHUTDOWN;
+  Serial.println(("Sending Button Commmand: Sending Message"));
+  if(!sendLine(data.client, String("CMD ") + cmd)){
+    Serial.println(("Sending Button Commmand: Failed to send message"));
   }
+
+  Serial.println(("Sending Button Commmand: Sent message successfully"));
+
+  return true;
 }
 
 void pollButtons(Data & data){
@@ -345,18 +388,16 @@ void setup(){
 
 void loop(){
   // 1) Idle: Wi-Fi OFF; just watch buttons
-  if (g_data.state == RState::IDLE || g_data.state == RState::SHUTDOWN){
-    logLine("STATE","IDLE");
+  if (g_data.state == RState::IDLE){
     pollButtons(g_data);
     delay(2);
     return;
   }
 
-  logLine("STATE","Progression");
-
   // State progression
   switch (g_data.state){
     case RState::WIFI_UP:
+      logLine("STATE","Handling Wifi UP");
       if (WiFi.status() == WL_CONNECTED){
         g_data.state = RState::RESOLVING;
         logLine("STATE","Wifi UP : Enter Resolving");
@@ -364,6 +405,7 @@ void loop(){
       break;
 
     case RState::RESOLVING:
+      logLine("STATE","Handling Resolving");
       if (mdnsResolveSign(g_data)) {
         g_data.state = RState::CONNECTING;
         logLine("STATE","Resolving : Enter Connecting");
@@ -376,6 +418,7 @@ void loop(){
       break;
 
     case RState::CONNECTING:
+      logLine("STATE","Handling Connecting");
       if (!g_data.signIP){
         g_data.state = RState::SHUTDOWN;
         logLine("STATE","Connecting : Enter Shutdown");
@@ -391,12 +434,6 @@ void loop(){
         logLine("TCP","connected");
         g_data.state = RState::CONNECTED;
         logLine("STATE","Connected : Enter Connected");
-
-        // Send the initial command if we have one
-        if (g_data.active_command_button_index >= 0){
-          send_button_command(g_data, g_data.active_command_button_index);
-          g_data.active_command_button_index = -1;
-        }
       } else {
         logLine("TCP","connect failed");
         g_data.client.stop();
@@ -406,31 +443,19 @@ void loop(){
       break;
 
     case RState::CONNECTED:
+      logLine("STATE","Handling Connected");
       // Read lines; process; then switch to LINGER
       if (g_data.client.connected()){
-        String line;
-
-        while (readLine(g_data.client, line)){
-          g_data.lastRx = millis();
-
-          if(line.startsWith("CMD ")){
-            // TODO execute command
-          }
-
-          line = "";
+        if(!send_button_command(g_data, g_data.active_command_button_index)){
+          logLine("STATE","Handling Connected: Failed to send button command");
+          g_data.state = RState::SHUTDOWN;
         }
-
-        // Heartbeat during linger window (even before we flip to LINGER, harmless)
-        if (millis() - g_data.lastPing >= HEARTBEAT_MS){
-          g_data.lastPing = millis();
-          if(!sendLine(g_data.client, String("PING ") + g_data.lastPing)){
-            logLine("SEND","FAILED");
-          }
+        else {
+          logLine("STATE","Handling Connected: Entering Linger");
+          g_data.state = RState::LINGER;
         }
-
-        // Enter linger state immediately after connection & first send
-        g_data.state = RState::LINGER;
       } else {
+        logLine("STATE","Handling Connected: Client not connected.");
         g_data.state = RState::SHUTDOWN;
       }
       break;
@@ -443,10 +468,18 @@ void loop(){
           break;
         }
 
+        if(!g_data.is_pulsing){
+          auto button_color = get_button_color(g_data.active_command_button_index);
+          set_color(button_color.r,button_color.g,button_color.b);
+        }
+
         String line;
 
         while (readLine(g_data.client, line)){
           g_data.lastRx = millis();
+
+          logLine("Receive", line);
+
           line = "";
         }
 
@@ -486,6 +519,8 @@ void loop(){
       wifiOff(g_data);
       g_data.state = RState::IDLE;
       logLine("STATE","Shutdown : Enter Idle");
+      set_color(255,255,255);
+      g_data.active_command_button_index = -1;
       break;
 
     default:

@@ -220,6 +220,8 @@ void loop(){
 
     if (!g_data.client || !g_data.client.connected()) {
       logLine("TCP", " from " + inc.remoteIP().toString());
+      g_data.client = inc;
+      g_data.client.setNoDelay(true);
     }
     else {
       inc.stop();
