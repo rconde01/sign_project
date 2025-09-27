@@ -34,9 +34,18 @@ enum class State {
   waiting_for_reply
 };
 
+enum class LightState {
+  off,
+  pulsing,
+  pulse_complete,
+  indicator
+};
+
 std::array<int,4> BTN_PINS = {BTN_SOPHIA, BTN_COFFEE, BTN_DOG, BTN_CAT};
 
 struct Color {
+  bool operator==(Color const & rhs) const = default;
+
   uint8_t r;
   uint8_t g;
   uint8_t b;
@@ -48,18 +57,21 @@ auto const purple       = Color{255,0,255};
 auto const orange       = Color{255,165,0};
 auto const red          = Color{255,0,0};
 auto const green        = Color{0,255,0};
+auto const black        = Color{0,0,0};
+auto const white        = Color{255,255,255};
 
 struct PulseData {
   Color color{};
 };
 
 struct Data {
-  PulseData       pulse_data{};
-  MyAtomic<bool>  is_pulsing{false};
-  TaskHandle_t    pulse_color_task_handle{};
-  State           state{State::idle};
-  int             active_command_button_index{-1};
-  unsigned long   button_press_time;
+  PulseData             pulse_data{};
+  MyAtomic<LightState>  light_state{LightState::off};
+  MyAtomic<Color>       current_color{white};
+  TaskHandle_t          pulse_color_task_handle{};
+  State                 state{State::idle};
+  int                   active_command_button_index{-1};
+  unsigned long         button_press_time;
 };
 
 void setup_buttons(){
@@ -67,7 +79,24 @@ void setup_buttons(){
     pinMode(pin, INPUT_PULLUP);
 }
 
-void setup_leds(){
+void set_color(Data & data, Color color){
+  if(color == data.current_color)
+    return;
+
+  ledcWrite(BACKLIGHT1_RED,   255 - color.r);
+  ledcWrite(BACKLIGHT1_GREEN, 255 - color.g);
+  ledcWrite(BACKLIGHT1_BLUE,  255 - color.b);
+  ledcWrite(BACKLIGHT2_RED,   255 - color.r);
+  ledcWrite(BACKLIGHT2_GREEN, 255 - color.g);
+  ledcWrite(BACKLIGHT2_BLUE,  255 - color.b);
+  ledcWrite(BACKLIGHT3_RED,   255 - color.r);
+  ledcWrite(BACKLIGHT3_GREEN, 255 - color.g);
+  ledcWrite(BACKLIGHT3_BLUE,  255 - color.b);
+  
+  data.current_color = color;
+}
+
+void setup_leds(Data & data){
   ledcSetClockSource(LEDC_AUTO_CLK);
 
   ledcAttachChannel(BACKLIGHT1_RED,   LEDC_FREQ, LEDC_RESOLUTION, 0);
@@ -84,15 +113,7 @@ void setup_leds(){
   // Some shut off and some don't
   delay(100);
 
-  ledcWrite(BACKLIGHT1_RED,   255);
-  ledcWrite(BACKLIGHT1_GREEN, 255);
-  ledcWrite(BACKLIGHT1_BLUE,  255);
-  ledcWrite(BACKLIGHT2_RED,   255);
-  ledcWrite(BACKLIGHT2_GREEN, 255);
-  ledcWrite(BACKLIGHT2_BLUE,  255);
-  ledcWrite(BACKLIGHT3_RED,   255);
-  ledcWrite(BACKLIGHT3_GREEN, 255);
-  ledcWrite(BACKLIGHT3_BLUE,  255);
+  set_color(data, black);
 }
 
 Color get_button_color(int button){
@@ -110,19 +131,9 @@ Color get_button_color(int button){
   }
 }
 
-void set_color(Color color){
-  ledcWrite(BACKLIGHT1_RED,   color.r);
-  ledcWrite(BACKLIGHT1_GREEN, color.g);
-  ledcWrite(BACKLIGHT1_BLUE,  color.b);
-  ledcWrite(BACKLIGHT2_RED,   color.r);
-  ledcWrite(BACKLIGHT2_GREEN, color.g);
-  ledcWrite(BACKLIGHT2_BLUE,  color.b);
-  ledcWrite(BACKLIGHT3_RED,   color.r);
-  ledcWrite(BACKLIGHT3_GREEN, color.g);
-  ledcWrite(BACKLIGHT3_BLUE,  color.b);
-}
-
 void pulse_color(Data & data, Color color){
+  data.light_state = LightState::pulsing;
+
   float rf = color.r / 255.0;
   float gf = color.g / 255.0;
   float bf = color.b / 255.0;
@@ -132,19 +143,19 @@ void pulse_color(Data & data, Color color){
 
   for(int i = 0; i < num_steps; ++i){
     float step = 1.0f - (float)i / (float)(num_steps - 1);
-    int red = 255 - (int)(rf*step*255);
-    int green = 255 - (int)(gf*step*255);
-    int blue = 255 - (int)(bf*step*255);
+    int red = (int)(rf*step*255);
+    int green = (int)(gf*step*255);
+    int blue = (int)(bf*step*255);
 
-    set_color(Color{red,green,blue});
+    set_color(data, Color{red,green,blue});
 
     vTaskDelay(pdMS_TO_TICKS(delay_value));
   }
 
-  data.is_pulsing = false;
+  data.light_state = LightState::pulse_complete;
 }
 
-void long_pulse_color_blocking(Color color){
+void long_pulse_color_blocking(Data & data, Color color){
   int num_steps = 1024;
   int delay_value = 2;
   int num_cycles = 3;
@@ -154,19 +165,12 @@ void long_pulse_color_blocking(Color color){
 
     auto level = 1.0f - (1.0f + cosf(num_cycles*step*2*M_PI))/2.0;
 
-    int red = 255 - (int)(color.r*level);
-    int green = 255 - (int)(color.g*level);
-    int blue = 255 - (int)(color.b*level);
+    int red = (int)(color.r*level);
+    int green = (int)(color.g*level);
+    int blue = (int)(color.b*level);
 
-    ledcWrite(BACKLIGHT1_RED,   red);
-    ledcWrite(BACKLIGHT1_GREEN, green);
-    ledcWrite(BACKLIGHT1_BLUE,  blue);
-    ledcWrite(BACKLIGHT2_RED,   red);
-    ledcWrite(BACKLIGHT2_GREEN, green);
-    ledcWrite(BACKLIGHT2_BLUE,  blue);
-    ledcWrite(BACKLIGHT3_RED,   red);
-    ledcWrite(BACKLIGHT3_GREEN, green);
-    ledcWrite(BACKLIGHT3_BLUE,  blue);
+    set_color(data, Color{red,green,blue});
+
     delay(delay_value);
   }
 }
@@ -195,7 +199,6 @@ bool handle_button_press(Data & data, int button_index){
   if(data.active_command_button_index != -1)
     return false; // already in a transaction
 
-  data.is_pulsing = true;
   auto color = get_button_color(button_index);
   create_pulse_task(data, color);
 
@@ -264,7 +267,7 @@ void setup(){
   delay(2000);
 
   setup_buttons();
-  setup_leds();
+  setup_leds(g_data);
 
   setup_esp_now(sign_mac,on_receive);
 }
@@ -284,14 +287,17 @@ void loop(){
       break;
 
     case State::waiting_for_reply:
-      if(!g_data.is_pulsing){
+      if(g_data.light_state == LightState::pulse_complete){
         auto button_color = get_button_color(g_data.active_command_button_index);
-        set_color(button_color);
+        set_color(g_data, button_color);
+        g_data.light_state = LightState::indicator;
       }
 
       if(millis() - g_data.button_press_time > 2000){
         g_data.state = State::idle;
         g_data.active_command_button_index = -1;
+        set_color(g_data, black);
+        g_data.light_state = LightState::off;
       }
       break;
   }
