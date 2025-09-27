@@ -290,6 +290,7 @@ void loop(){
         set_color(button_color.r,button_color.g,button_color.b);
       }
       g_data.state = State::idle;
+      g_data.active_command_button_index = -1;
       break;
   }
 }
