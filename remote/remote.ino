@@ -36,8 +36,6 @@ enum class State {
 
 enum class LightState {
   off,
-  pulsing,
-  pulse_complete,
   indicator
 };
 
@@ -131,29 +129,29 @@ Color get_button_color(int button){
   }
 }
 
-void pulse_color(Data & data, Color color){
-  data.light_state = LightState::pulsing;
+// void pulse_color(Data & data, Color color){
+//   data.light_state = LightState::pulsing;
 
-  float rf = color.r / 255.0;
-  float gf = color.g / 255.0;
-  float bf = color.b / 255.0;
+//   float rf = color.r / 255.0;
+//   float gf = color.g / 255.0;
+//   float bf = color.b / 255.0;
 
-  int num_steps = 256;
-  int delay_value = 2;
+//   int num_steps = 256;
+//   int delay_value = 5;
 
-  for(int i = 0; i < num_steps; ++i){
-    float step = 1.0f - (float)i / (float)(num_steps - 1);
-    int red = (int)(rf*step*255);
-    int green = (int)(gf*step*255);
-    int blue = (int)(bf*step*255);
+//   for(int i = 0; i < num_steps; ++i){
+//     float step = 1.0f - (float)i / (float)(num_steps - 1);
+//     int red = (int)(rf*step*255);
+//     int green = (int)(gf*step*255);
+//     int blue = (int)(bf*step*255);
 
-    set_color(data, Color{red,green,blue});
+//     set_color(data, Color{red,green,blue});
 
-    vTaskDelay(pdMS_TO_TICKS(delay_value));
-  }
+//     vTaskDelay(pdMS_TO_TICKS(delay_value));
+//   }
 
-  data.light_state = LightState::pulse_complete;
-}
+//   data.light_state = LightState::pulse_complete;
+// }
 
 void long_pulse_color_blocking(Data & data, Color color){
   int num_steps = 1024;
@@ -175,32 +173,32 @@ void long_pulse_color_blocking(Data & data, Color color){
   }
 }
 
-void pulse_color_task(void * data){
-  auto the_data = reinterpret_cast<Data *>(data);
+// void pulse_color_task(void * data){
+//   auto the_data = reinterpret_cast<Data *>(data);
 
-  pulse_color(*the_data, the_data->pulse_data.color);
+//   pulse_color(*the_data, the_data->pulse_data.color);
 
-  vTaskDelete(NULL);
-}
+//   vTaskDelete(NULL);
+// }
 
-void create_pulse_task(Data & data, Color color){
-  data.pulse_data.color = color;
+// void create_pulse_task(Data & data, Color color){
+//   data.pulse_data.color = color;
 
-  xTaskCreate(
-    pulse_color_task,
-    "pulse task",
-    2048,
-    &data,
-    1,
-    &data.pulse_color_task_handle);
-}
+//   xTaskCreate(
+//     pulse_color_task,
+//     "pulse task",
+//     2048,
+//     &data,
+//     1,
+//     &data.pulse_color_task_handle);
+// }
 
 bool handle_button_press(Data & data, int button_index){
   if(data.active_command_button_index != -1)
     return false; // already in a transaction
 
   auto color = get_button_color(button_index);
-  create_pulse_task(data, color);
+  set_color(data, color);
 
   data.active_command_button_index = button_index;
   data.button_press_time = millis();
@@ -287,12 +285,6 @@ void loop(){
       break;
 
     case State::waiting_for_reply:
-      if(g_data.light_state == LightState::pulse_complete){
-        auto button_color = get_button_color(g_data.active_command_button_index);
-        set_color(g_data, button_color);
-        g_data.light_state = LightState::indicator;
-      }
-
       if(millis() - g_data.button_press_time > 2000){
         g_data.state = State::idle;
         g_data.active_command_button_index = -1;
