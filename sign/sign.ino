@@ -1,5 +1,4 @@
 #include <Adafruit_NeoPixel.h>
-#include <ESPmDNS.h>
 
 #include "action.hpp"
 #include "mp3.hpp"
@@ -39,68 +38,7 @@ auto const orange       = Color{255,165,0};
 struct Data {
   HardwareSerial    mp3{1};
   Adafruit_NeoPixel strip{NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800};
-  WiFiServer        server{TCP_PORT};
-  WiFiClient        client{};
 };
-
-void onWiFiEvent(WiFiEvent_t event) {
-  Serial.printf("[WiFi-event] event: %d\n", event);
-
-  switch (event) {
-    case ARDUINO_EVENT_WIFI_READY:               Serial.println("WiFi interface ready"); break;
-    case ARDUINO_EVENT_WIFI_SCAN_DONE:           Serial.println("Completed scan for access points"); break;
-    case ARDUINO_EVENT_WIFI_STA_START:           Serial.println("WiFi client started"); break;
-    case ARDUINO_EVENT_WIFI_STA_STOP:            Serial.println("WiFi clients stopped"); break;
-    case ARDUINO_EVENT_WIFI_STA_CONNECTED:       Serial.println("Connected to access point"); break;
-    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:    Serial.println("Disconnected from WiFi access point"); break;
-    case ARDUINO_EVENT_WIFI_STA_AUTHMODE_CHANGE: Serial.println("Authentication mode of access point has changed"); break;
-    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
-      logLine("WiFi", "GOT_IP " + WiFi.localIP().toString());
-
-      if (MDNS.begin(SIGN_HOSTNAME)) {
-        MDNS.addService("sign","tcp",TCP_PORT); // _sign._tcp
-        logLine("MDNS", "sign.local up");
-      }
-      else {
-        logLine("MDNS","begin failed");
-      }
-      break;
-    case ARDUINO_EVENT_WIFI_STA_LOST_IP:        Serial.println("Lost IP address and IP address is reset to 0"); break;
-    case ARDUINO_EVENT_WPS_ER_SUCCESS:          Serial.println("WiFi Protected Setup (WPS): succeeded in enrollee mode"); break;
-    case ARDUINO_EVENT_WPS_ER_FAILED:           Serial.println("WiFi Protected Setup (WPS): failed in enrollee mode"); break;
-    case ARDUINO_EVENT_WPS_ER_TIMEOUT:          Serial.println("WiFi Protected Setup (WPS): timeout in enrollee mode"); break;
-    case ARDUINO_EVENT_WPS_ER_PIN:              Serial.println("WiFi Protected Setup (WPS): pin code in enrollee mode"); break;
-    case ARDUINO_EVENT_WIFI_AP_START:           Serial.println("WiFi access point started"); break;
-    case ARDUINO_EVENT_WIFI_AP_STOP:            Serial.println("WiFi access point  stopped"); break;
-    case ARDUINO_EVENT_WIFI_AP_STACONNECTED:    Serial.println("Client connected"); break;
-    case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED: Serial.println("Client disconnected"); break;
-    case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED:   Serial.println("Assigned IP address to client"); break;
-    case ARDUINO_EVENT_WIFI_AP_PROBEREQRECVED:  Serial.println("Received probe request"); break;
-    case ARDUINO_EVENT_WIFI_AP_GOT_IP6:         Serial.println("AP IPv6 is preferred"); break;
-    case ARDUINO_EVENT_WIFI_STA_GOT_IP6:        Serial.println("STA IPv6 is preferred"); break;
-    case ARDUINO_EVENT_ETH_GOT_IP6:             Serial.println("Ethernet IPv6 is preferred"); break;
-    case ARDUINO_EVENT_ETH_START:               Serial.println("Ethernet started"); break;
-    case ARDUINO_EVENT_ETH_STOP:                Serial.println("Ethernet stopped"); break;
-    case ARDUINO_EVENT_ETH_CONNECTED:           Serial.println("Ethernet connected"); break;
-    case ARDUINO_EVENT_ETH_DISCONNECTED:        Serial.println("Ethernet disconnected"); break;
-    case ARDUINO_EVENT_ETH_GOT_IP:              Serial.println("Obtained IP address"); break;
-    default:                                    break;
-  }
-}
-
-void setup_wifi(){
-  WiFi.onEvent(onWiFiEvent);
-  WiFi.setAutoReconnect(true);
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-}
-
-void setup_server(Data & data){
-  data.server.begin();
-  data.server.setNoDelay(true);
-  logLine("TCP", "Server listening :" + String(TCP_PORT));
-}
 
 void setup_buttons(){
   pinMode(BTN_YES, INPUT_PULLUP);
@@ -181,63 +119,28 @@ void execute_command(Data & data, String cmd){
   }
 }
 
-void handleCommand(Data & data, const String& line) {
-  logLine("CMD", line);
+Data g_data{};
 
-  if (line.startsWith("PING ")) {
-    sendLine(data.client, "PONG " + line.substring(5));
-    return;
-  }
+void on_receive(const esp_now_recv_info_t* recv_info, const unsigned char* incomingData, int len){
+  auto command = get_command(recv_info,incomingData,len);
 
-  if (line.startsWith("CMD ")) {
-    auto cmd = line.substring(4);
-
-    execute_command(data, cmd);
-
-    sendLine(data.client, "ACK " + line.substring(4));
+  if(command){
+    execute_command(g_data,*command);
   }
 }
-
-Data g_data{};
 
 void setup(){
   Serial.begin(115200);
   delay(2000);
 
-  logLine("BOOT","SIGN id=" + deviceId());
-
   setup_buttons();
   setup_leds(g_data);
   setup_mp3(g_data);
-  setup_wifi();
-  setup_server(g_data);
+
+  setup_esp_now(remote_mac,on_receive);
 }
 
 void loop(){
-  // Accept new client
-  if (WiFiClient inc = g_data.server.available()){
-    inc.setNoDelay(true);
-
-    if (!g_data.client || !g_data.client.connected()) {
-      logLine("TCP", " from " + inc.remoteIP().toString());
-      g_data.client = inc;
-      g_data.client.setNoDelay(true);
-    }
-    else {
-      inc.stop();
-      logLine("TCP", "rejected client from " + inc.remoteIP().toString() + " (busy)");
-      return;
-    }
-  }
-
-  if(g_data.client && g_data.client.connected()){
-    String line;
-    while (readLine(g_data.client,line)){
-      handleCommand(g_data,line);
-      line="";
-    }
-  }
-
   int yes_btn = !digitalRead(BTN_YES);
   int no_btn = !digitalRead(BTN_NO);  
 
