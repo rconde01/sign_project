@@ -38,6 +38,7 @@ auto const orange       = Color{255,165,0};
 struct Data {
   HardwareSerial    mp3{1};
   Adafruit_NeoPixel strip{NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800};
+  bool              active{false};
 };
 
 void setup_buttons(){
@@ -97,6 +98,8 @@ void light_sign(Data & data, int sign_number){
     }
   }
 
+  data.active = led_start != -1;
+
   data.strip.show();
 }
 
@@ -140,27 +143,29 @@ void setup(){
   setup_esp_now(remote_mac,on_receive);
 }
 
-void loop(){
-  int yes_btn = !digitalRead(BTN_YES);
-  int no_btn = !digitalRead(BTN_NO);  
+void handle_button_press(int button){
+  if(button == 0)
+    send_command(remote_mac,"no");
+  else if(button == 1)
+    send_command(remote_mac,"yes");
 
-  // if(yes_btn){
-  //   handle_button_press(1);
-  // }
-  // else if(no_btn){
-  //   handle_button_press(0);
-  // }  
+  light_sign(g_data, -1);
+}
+
+void loop(){
+  if(g_data.active){
+    int yes_btn = !digitalRead(BTN_YES);
+    int no_btn = !digitalRead(BTN_NO);  
+
+    if(yes_btn){
+      handle_button_press(1);
+    }
+    else if(no_btn){
+      handle_button_press(0);
+    }  
+  }
 
   delay(2);
 }
 
 
-// void handle_button_press(int button){
-//   if(button == 0)
-//     send_message_and_wait_ack(g_data.comm, "no");
-//   else if(button == 1)
-//     send_message_and_wait_ack(g_data.comm, "yes");
-
-//   light_sign(-1);
-//   g_data.is_active = false;
-// }

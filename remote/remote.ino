@@ -32,6 +32,8 @@ enum class State {
   idle,
   button_pressed,
   waiting_for_reply,
+  yes,
+  no,
   shutdown
 };
 
@@ -59,16 +61,11 @@ auto const green        = Color{0,255,0};
 auto const black        = Color{0,0,0};
 auto const white        = Color{255,255,255};
 
-struct PulseData {
-  Color color{};
-};
-
 struct Data {
-  PulseData             pulse_data{};
   MyAtomic<LightState>  light_state{LightState::off};
   MyAtomic<Color>       current_color{white};
   TaskHandle_t          pulse_color_task_handle{};
-  State                 state{State::idle};
+  MyAtomic<State>       state{State::idle};
   int                   active_command_button_index{-1};
   unsigned long         button_press_time;
 };
@@ -213,7 +210,12 @@ void on_receive(const esp_now_recv_info_t* recv_info, const unsigned char* incom
   auto command = get_command(recv_info,incomingData,len);
 
   if(command){
-
+    if(*command == "yes"){
+      g_data.state = State::yes;
+    }
+    else if(*command == "no"){
+      g_data.state = State::no;
+    }
   }
 }
 
@@ -244,16 +246,26 @@ void loop(){
       break;
 
     case State::waiting_for_reply:
-      if(millis() - g_data.button_press_time > 2000){
-        g_data.state = State::idle;
-        g_data.active_command_button_index = -1;
-        set_color(g_data, black);
-        g_data.light_state = LightState::off;
+      if(millis() - g_data.button_press_time > 30000){
         g_data.state = State::shutdown;
       }
       break;
 
+    case State::yes:
+      long_pulse_color_blocking(g_data, green);
+      g_data.state = State::shutdown;
+      break;
+
+    case State::no:
+      long_pulse_color_blocking(g_data, red);
+      g_data.state = State::shutdown;
+      break;
+
     case State::shutdown:
+      Serial.println("Shutting Down");
+      g_data.active_command_button_index = -1;      
+      set_color(g_data, black);
+      g_data.light_state = LightState::off;
       teardown_esp_now();
       g_data.state = State::idle;
       break;
