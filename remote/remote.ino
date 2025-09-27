@@ -31,7 +31,8 @@ static const uint32_t REMOTE_INACTIVITY_MS = 120000; // 2 minutes
 enum class State {
   idle,
   button_pressed,
-  waiting_for_reply
+  waiting_for_reply,
+  shutdown
 };
 
 enum class LightState {
@@ -129,30 +130,6 @@ Color get_button_color(int button){
   }
 }
 
-// void pulse_color(Data & data, Color color){
-//   data.light_state = LightState::pulsing;
-
-//   float rf = color.r / 255.0;
-//   float gf = color.g / 255.0;
-//   float bf = color.b / 255.0;
-
-//   int num_steps = 256;
-//   int delay_value = 5;
-
-//   for(int i = 0; i < num_steps; ++i){
-//     float step = 1.0f - (float)i / (float)(num_steps - 1);
-//     int red = (int)(rf*step*255);
-//     int green = (int)(gf*step*255);
-//     int blue = (int)(bf*step*255);
-
-//     set_color(data, Color{red,green,blue});
-
-//     vTaskDelay(pdMS_TO_TICKS(delay_value));
-//   }
-
-//   data.light_state = LightState::pulse_complete;
-// }
-
 void long_pulse_color_blocking(Data & data, Color color){
   int num_steps = 1024;
   int delay_value = 2;
@@ -172,26 +149,6 @@ void long_pulse_color_blocking(Data & data, Color color){
     delay(delay_value);
   }
 }
-
-// void pulse_color_task(void * data){
-//   auto the_data = reinterpret_cast<Data *>(data);
-
-//   pulse_color(*the_data, the_data->pulse_data.color);
-
-//   vTaskDelete(NULL);
-// }
-
-// void create_pulse_task(Data & data, Color color){
-//   data.pulse_data.color = color;
-
-//   xTaskCreate(
-//     pulse_color_task,
-//     "pulse task",
-//     2048,
-//     &data,
-//     1,
-//     &data.pulse_color_task_handle);
-// }
 
 bool handle_button_press(Data & data, int button_index){
   if(data.active_command_button_index != -1)
@@ -266,8 +223,6 @@ void setup(){
 
   setup_buttons();
   setup_leds(g_data);
-
-  setup_esp_now(sign_mac,on_receive);
 }
 
 void loop(){
@@ -279,8 +234,12 @@ void loop(){
       break;
 
     case State::button_pressed:
-      if(send_button_command(g_data,g_data.active_command_button_index)){
+      if(setup_esp_now(sign_mac,on_receive) && 
+         send_button_command(g_data,g_data.active_command_button_index)){
         g_data.state = State::waiting_for_reply;
+      }
+      else {
+        g_data.state = State::shutdown;
       }
       break;
 
@@ -290,7 +249,13 @@ void loop(){
         g_data.active_command_button_index = -1;
         set_color(g_data, black);
         g_data.light_state = LightState::off;
+        g_data.state = State::shutdown;
       }
+      break;
+
+    case State::shutdown:
+      teardown_esp_now();
+      g_data.state = State::idle;
       break;
   }
 }

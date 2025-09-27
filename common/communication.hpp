@@ -6,6 +6,7 @@
 
 #include <esp_mac.h>
 #include <esp_now.h>
+#include <esp_wifi.h>
 
 uint8_t remote_mac[6] = {0xF0, 0x24, 0xF9, 0x54, 0x0A, 0xB4};
 uint8_t sign_mac[6] = {0xF0, 0x24, 0xF9, 0xE8, 0x35, 0xE0};
@@ -25,7 +26,7 @@ inline std::optional<String> get_command(const esp_now_recv_info_t* recv_info, c
   return std::nullopt;
 }
 
-inline void setup_esp_now(uint8_t peer_mac[6], esp_now_recv_cb_t on_command) {
+inline bool setup_esp_now(uint8_t peer_mac[6], esp_now_recv_cb_t on_command) {
   Serial.println("Setting up ESP-NOW...");
 
   Serial.println("Setting up ESP-NOW: Enable WIFI_STA");
@@ -34,7 +35,7 @@ inline void setup_esp_now(uint8_t peer_mac[6], esp_now_recv_cb_t on_command) {
   Serial.println("Setting up ESP-NOW: Initialize ESP-NOW");
   if (esp_now_init() != ESP_OK) {
     Serial.println("Error initializing ESP-NOW");
-    return;
+    return false;
   }
 
   // Register callbacks
@@ -53,12 +54,26 @@ inline void setup_esp_now(uint8_t peer_mac[6], esp_now_recv_cb_t on_command) {
 
   if (esp_now_add_peer(&peerInfo) != ESP_OK) {
     Serial.println("Setting up ESP-NOW: Failed to add peer!!!");
+    return false;
   }
   else {
     Serial.println("Setting up ESP-NOW: Added peer.");
   }
 
   Serial.println("Setting up ESP-NOW: Complete");
+  return true;
+}
+
+void teardown_esp_now() {
+  esp_now_unregister_recv_cb();
+  esp_now_unregister_send_cb();
+
+  if (esp_now_deinit() != ESP_OK) {
+    Serial.println("Error deinitializing ESP-NOW");
+  }
+
+  WiFi.mode(WIFI_OFF);
+  esp_wifi_stop();
 }
 
 inline bool send_command(uint8_t mac[6], String cmd) {
