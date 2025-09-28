@@ -130,7 +130,7 @@ Color get_button_color(int button){
 void long_pulse_color_blocking(Data & data, Color color){
   int num_steps = 1024;
   int delay_value = 2;
-  int num_cycles = 3;
+  int num_cycles = 10;
 
   for(int i = 0; i < num_steps; ++i){
     float step = 1.0f - (float)i / (float)(num_steps - 1);
