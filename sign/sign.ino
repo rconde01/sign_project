@@ -23,6 +23,7 @@
 #define DOG_SIGN 1
 #define CAT_SIGN 2
 #define SOPHIA_SIGN 3
+#define NO_SIGN -1
 
 struct Color {
   uint8_t r;
@@ -33,7 +34,7 @@ struct Color {
 auto const yellow       = Color{255,255,0};
 auto const blue         = Color{0,0,255};
 auto const purple       = Color{255,0,255};
-auto const orange       = Color{255,165,0};
+auto const orange       = Color{255,50,0};
 
 struct Data {
   HardwareSerial    mp3{1};
@@ -98,7 +99,7 @@ void light_sign(Data & data, int sign_number){
     }
   }
 
-  data.active = sign_number != -1;
+  data.active = sign_number != NO_SIGN;
 
   data.strip.show();
 }
@@ -119,6 +120,9 @@ void execute_command(Data & data, String cmd){
   else if(cmd == "coffee"){
     light_sign(data, COFFEE_SIGN);
     mp3PlayIndex(data.mp3,  COFFEE_MP3);
+  }
+  else if(cmd == "disable"){
+    light_sign(data, NO_SIGN);
   }
 }
 
@@ -149,7 +153,7 @@ void handle_button_press(int button){
   else if(button == 1)
     send_command(remote_mac,"yes");
 
-  light_sign(g_data, -1);
+  light_sign(g_data, NO_SIGN);
 }
 
 void loop(){

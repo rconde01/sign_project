@@ -55,7 +55,7 @@ struct Color {
 auto const yellow       = Color{255,255,0};
 auto const blue         = Color{0,0,255};
 auto const purple       = Color{255,0,255};
-auto const orange       = Color{255,165,0};
+auto const orange       = Color{255,50,0};
 auto const red          = Color{255,0,0};
 auto const green        = Color{0,255,0};
 auto const black        = Color{0,0,0};
@@ -250,6 +250,7 @@ void loop(){
 
     case State::waiting_for_reply:
       if(millis() - g_data.button_press_time > 30000){
+        send_command(sign_mac, "disable");
         g_data.state = State::shutdown;
       }
       break;
