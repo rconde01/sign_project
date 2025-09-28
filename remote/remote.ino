@@ -128,7 +128,7 @@ Color get_button_color(int button){
 }
 
 void long_pulse_color_blocking(Data & data, Color color){
-  int num_steps = 5*1024;
+  int num_steps = 4*1024;
   int delay_value = 2;
   int num_cycles = 10;
 
