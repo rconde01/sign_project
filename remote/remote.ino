@@ -223,6 +223,9 @@ void setup(){
   Serial.begin(115200);
   delay(2000);
 
+  setCpuFrequencyMhz(80);
+  Serial.printf("After: %d MHz\n", getCpuFrequencyMhz());
+
   setup_buttons();
   setup_leds(g_data);
 }

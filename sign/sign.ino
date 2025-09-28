@@ -98,7 +98,7 @@ void light_sign(Data & data, int sign_number){
     }
   }
 
-  data.active = led_start != -1;
+  data.active = sign_number != -1;
 
   data.strip.show();
 }
