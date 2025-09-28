@@ -128,7 +128,7 @@ Color get_button_color(int button){
 }
 
 void long_pulse_color_blocking(Data & data, Color color){
-  int num_steps = 1024;
+  int num_steps = 5*1024;
   int delay_value = 2;
   int num_cycles = 10;
 
@@ -245,6 +245,8 @@ void setup(){
 }
 
 void loop(){
+  auto const int request_timeout_milliseconds = 90*1000;
+
   switch(g_data.state){
     case State::idle:
       if(pollButtons(g_data)){
@@ -264,7 +266,7 @@ void loop(){
       break;
 
     case State::waiting_for_reply:
-      if(millis() - g_data.button_press_time > 30000){
+      if(millis() - g_data.button_press_time > request_timeout_milliseconds){
         send_command(sign_mac, "disable");
         g_data.state = State::shutdown;
       }
