@@ -245,7 +245,7 @@ void setup(){
 }
 
 void loop(){
-  auto const int request_timeout_milliseconds = 90*1000;
+  auto const request_timeout_milliseconds = 90*1000;
 
   switch(g_data.state){
     case State::idle:
