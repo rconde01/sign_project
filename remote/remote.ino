@@ -64,10 +64,10 @@ auto const white        = Color{255,255,255};
 struct Data {
   MyAtomic<LightState>  light_state{LightState::off};
   MyAtomic<Color>       current_color{white};
-  TaskHandle_t          pulse_color_task_handle{};
   MyAtomic<State>       state{State::idle};
   int                   active_command_button_index{-1};
-  unsigned long         button_press_time;
+  unsigned long         button_press_time{};
+  bool                  esp_up{false};
 };
 
 void setup_buttons(){
@@ -219,6 +219,13 @@ void on_receive(const esp_now_recv_info_t* recv_info, const unsigned char* incom
   }
 }
 
+void sleep(){
+  if(g_data.esp_up)
+    teardown_esp_now();
+
+  esp_light_sleep_start();
+}
+
 void setup(){
   Serial.begin(115200);
   delay(2000);
@@ -226,8 +233,15 @@ void setup(){
   setCpuFrequencyMhz(80);
   Serial.printf("After: %d MHz\n", getCpuFrequencyMhz());
 
+  esp_sleep_enable_gpio_wakeup();
+  esp_sleep_enable_ext1_wakeup(
+    (1 << BTN_CAT) | (1 << BTN_COFFEE) | (1 << BTN_DOG) | (1 << BTN_SOPHIA),
+    ESP_EXT1_WAKEUP_ANY_HIGH);
+
   setup_buttons();
   setup_leds(g_data);
+
+  sleep();
 }
 
 void loop(){
@@ -241,7 +255,8 @@ void loop(){
     case State::button_pressed:
       if(setup_esp_now(sign_mac,on_receive) && 
          send_button_command(g_data,g_data.active_command_button_index)){
-        g_data.state = State::waiting_for_reply;
+        g_data.esp_up = true;
+        g_data.state = State::waiting_for_reply;        
       }
       else {
         g_data.state = State::shutdown;
@@ -266,12 +281,12 @@ void loop(){
       break;
 
     case State::shutdown:
-      Serial.println("Shutting Down");
+      Serial.println("Shutting Down");      
       g_data.active_command_button_index = -1;      
       set_color(g_data, black);
       g_data.light_state = LightState::off;
-      teardown_esp_now();
       g_data.state = State::idle;
+      sleep();      
       break;
   }
 }
